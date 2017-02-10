@@ -2,7 +2,6 @@ import numpy as np
 from phys_tools.loaders import meta_loaders, spyking_loaders
 import tables as tb
 from abc import ABC, abstractmethod
-from numba import jit
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
@@ -41,7 +40,7 @@ class Unit(ABC):
         Return spiketimes in millisecond time base.
         :param t_start: start time in milliseconds from recording start
         :param t_end: endtime
-        :return: array of times in millis.
+        :return: array of float times in millis.
         """
 
         st = int(self.session.millis_to_samples(t_start))
@@ -68,7 +67,6 @@ class Unit(ABC):
         :param convolve: default is false. If "gaussan" or "boxcar", use these shaped kernels to make plot instead of histogram.
         :return:
         """
-        fs = self.session.fs
         t_0s = np.asarray(t_0s)
 
         if (pre_ms + post_ms) % binsize_ms:
@@ -80,21 +78,24 @@ class Unit(ABC):
             print('warning the total window size is not divisible by the binsize_ms '
                   'adjusting the post time to {}.'.format(post_ms))
 
-        _s = int(fs / 1000)  # conversion factor for ms to samples
-        binsize_samp = binsize_ms * _s
-        st = t_0s - pre_ms * _s
-        n_samp = (post_ms + pre_ms) * _s
+        binsize_samp = self.session.millis_to_samples(binsize_ms)
+        pre_samp = int(self.session.millis_to_samples(pre_ms))
+        post_samp = int(self.session.millis_to_samples(post_ms))
+        n_samp = pre_samp + post_samp
 
-        rasters = self.get_rasters_samples(st, n_samp)
+        spiketrials, spiketimes, _ = self.get_rasters_samples(t_0s, pre_samp, post_samp)
 
         if not convolve:
-            psth = _make_psth(rasters, binsize_samp)
-            # x = np.arange(-pre_ms+binsize_ms, post_ms, binsize_ms)
-            nbins = (pre_ms + post_ms) / binsize_ms
+            binsize = int(binsize_samp)
+            nbins = int(n_samp / binsize_samp)
+            bin_right_edges = [binsize * x - pre_samp for x in range(nbins+1)]
+            psth, _ = np.histogram(spiketimes, bins=bin_right_edges)
             x = np.linspace(-pre_ms + .5 * binsize_ms, post_ms - .5 * binsize_ms, nbins)
             assert len(psth) == len(x)
         else:
-            ss = rasters.sum(axis=0).astype(np.float)
+            ss = np.zeros(n_samp)
+            for i, j in enumerate(range(-pre_samp, post_samp)):
+                ss[i] = (spiketimes == j).sum()
             if convolve == 'gaussian':
                 kernel = norm.pdf(np.linspace(-3, 3, int(binsize_ms * self.session.fs/1000)))
             elif convolve == 'boxcar':
@@ -107,7 +108,7 @@ class Unit(ABC):
         # scale to Hz
         n_trials = len(t_0s)
         if convolve:
-            sec_per_bin = kernel.sum() * n_trials / fs
+            sec_per_bin = kernel.sum() * n_trials / self.session.fs
         else:
             sec_per_bin = binsize_ms * n_trials / 1000
         psth_hz = psth / sec_per_bin
@@ -124,48 +125,66 @@ class Unit(ABC):
             axis.set_ylim((0, None))
         return axis
 
-    def get_rasters_ms(self, start_times_ms, size_ms) -> np.array:
+    def get_rasters_ms(self, t_0s_ms, pre_ms, post_ms) -> (np.array, np.array, tuple):
         """
-        Millisecond raster arrays from msec parameters. Returns boolean matrix of rasters in *MILLISECOND*
-        timebase. (N_starts, size_ms+1)
+        Millisecond raster arrays from msec parameters. Returns tuple of 2 arrays and a size:
 
-        Uses get_epoch_ms to get the spike times in ms.
+            trial numbers array, spiketimes (in ms) array, shape: (ntrials, (t_min, t_max))
 
-        :param start_times_ms: 1d array with times which will correspond with index zero in each row.
-        :param size_ms: number of milliseconds to consider
-        :return: raster array in millisecond timebase! shape=(ntrials, size_ms)
+        Times are all relative ot t_0 of each trial. Shape is required for subsequent plotting/rasterization.
+
+        :param t_0s_ms: 1d array with times which will correspond with index zero in each row.
+        :param pre_ms: number of milliseconds before t0s to return.
+        :param post_ms: number of milliseconds after t0s to return.
+        :return: trial array, spiketimes(ms) array, shape: (ntrials, (t_min, t_max))
         """
-        nstarts = len(start_times_ms)
-        rasters = np.zeros((nstarts, int(size_ms)), dtype=np.bool)
-        #TODO: refactor to return spiketimes not bool matrix.
-        for i in range(len(start_times_ms)):
-            r_sub = rasters[i]
-            t = start_times_ms[i]
-            spike_sub = np.rint(self.get_epoch_ms(t, t + size_ms) - t).astype(np.uint64)
-            spike_sub = spike_sub[spike_sub < size_ms]  # rounding could make a spike w/
-            r_sub[spike_sub] = True
-        return rasters  # these are in milliseconds!!
+        nstarts = len(t_0s_ms)
+        spiketimes = []
+        spiketrials = []
+        start_times_ms = t_0s_ms - pre_ms
+        size = pre_ms + post_ms
+        for i in range(nstarts):
+            st = start_times_ms[i]
+            t0 = t_0s_ms[i]
+            spike_sub = self.get_epoch_ms(st, st + size) - t0  # everything here is float or at least signed.
+            spiketrials.extend([i] * len(spike_sub))
+            spiketimes.append(spike_sub)
+        spiketimes = np.concatenate(spiketimes)
+        spiketrials = np.array(spiketrials)
+        shape = (nstarts, (-pre_ms, post_ms))
+        return spiketrials, spiketimes, shape  # these are in milliseconds!!
 
-    def get_rasters_samples(self, start_times, size):
+    def get_rasters_samples(self, t_0s, pre, post) -> (np.array, np.array, tuple):
         """
-        Gets rasters in sample time from start times and size window specified in samples.
+        Sample timebase raster arrays from sample time parameters. Returns tuple of 2 arrays and a size:
 
-        :param start_times: array of times at which to make the rasters.
-        :param spikes: the spiketimes of the unit.
-        :param size: number of samples to consider for each raster.
-        :return: raster array in millisecond samples timebase shape=(ntrials, size)!
+            trial numbers array, spiketimes (in samples) array, shape: (ntrials, (t_min, t_max))
+
+        Times are all relative ot t_0 of each trial. Shape is required for subsequent plotting/rasterization.
+
+        :param t_0s: 1 d array with start reference times.
+        :param pre: number of samples before t0 to return for each trial.
+        :param post: number of samples after t0 to return for each trial.
+        :return: trial array, spiketimes(samples) array, shape: (ntrials, (t_min, t_max))
         """
         spikes = self.spiketimes
-        nstarts = len(start_times)
-        rasters = np.zeros((nstarts, size + 1), dtype=np.bool)
-        #TODO: REFACTOR TO RETURN SPIKETIMES
-        for i in range(len(start_times)):
-            t = np.uint64(start_times[i])
-            spike_sub = spikes[(spikes > t) & (spikes < t + size)] - t
-            r_sub = rasters[i]
-            r_sub[spike_sub] = True
-
-        return rasters
+        nstarts = len(t_0s)
+        start_times = t_0s - pre
+        size = pre + post
+        spiketimes = []
+        spiketrials = []
+        start_times = start_times.astype(np.uint64)
+        for i in range(nstarts):
+            st = start_times[i]
+            spike_sub = spikes[(spikes > st) & (spikes < st + size)]
+            spike_sub -= st
+            spike_sub = spike_sub.astype(np.int64) - pre  # uint can't be negative.
+            spiketrials.extend([i]*len(spike_sub))
+            spiketimes.append(spike_sub)
+        spiketimes = np.concatenate(spiketimes)
+        spiketrials = np.array(spiketrials)
+        shape = (nstarts, (-pre, post))
+        return spiketrials, spiketimes, shape
 
     def plot_rasters(self, rasters, x=None, axis=None, quick_plot=True, color=None, alpha=1, offset=0,
                      markersize=5):
@@ -188,17 +207,21 @@ class Unit(ABC):
         :param markersize: size of marker to use for plotting.
         :return:
         """
-        # TODO: this is asinine converting back to spiketimes. THIS NEED MAJOR REFACTORING.
+
         if type(rasters) == tuple and len(rasters) == 3:
-            trials, times, ntrials = rasters  # need ntrials because of sparse activity
+            trials, times, shape = rasters  # need ntrials because of sparse activity
+            ntrials, (x_min, x_max) = shape
         else:
             trials, times = np.where(rasters)
             ntrials = len(rasters)
+            x_min, x_max = None, None
             if x is not None:  # transform from matrix indices to time specified by x array.
                 if not len(rasters.T) == len(x):
                     raise ValueError('raster array has time length of {}, x array has length of {}.'
                                      'These must be equal.'.format(len(rasters.T), len(x)))
                 times[:] = x[times]
+                x_min, x_max = x.min(), x.max()
+
         trials += offset + 1  # so we start at trial 1 on the plot and not trial 0.
 
         if axis is None:
@@ -220,7 +243,8 @@ class Unit(ABC):
                 axis.spines['left'].set_visible(False)
                 axis.xaxis.set_ticks_position('bottom')
                 axis.set_yticks([])
-
+        if x_min:
+            axis.set_xlim([x_min, x_max])
         return axis
 
     def __str__(self):
@@ -329,23 +353,3 @@ class Session(ABC):
             return times / factor
         else:
             raise ValueError('sorry, samples_to_millis cannot use this datatype.')
-
-
-@jit
-def _make_psth(rasters, binsize):
-    """
-
-    :param rasters: sparse arrays
-    :param binsize:
-    :return:
-    """
-    binsize = int(binsize)
-    psth = rasters.sum(axis=0)
-    nbins = int(np.floor(len(psth) / binsize))
-    psth_binned = np.zeros(nbins, dtype=np.int)
-    for i in range(nbins):
-        binstart = i * binsize
-        binstop = (i + 1) * binsize
-        psth_binned[i] = np.sum(psth[binstart:binstop])
-    # assert binstop == psth.size - 1  # this works
-    return psth_binned

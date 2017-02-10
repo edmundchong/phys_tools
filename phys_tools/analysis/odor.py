@@ -3,6 +3,7 @@ from ..loaders import meta_loaders
 import tables as tb
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
 
 ODOR_FIELD = "olfas:olfa_{}:odor"
 ODOR_CONC_FIELD = "odorconc"
@@ -52,9 +53,7 @@ class OdorUnit(Unit):
         """
         inhs, exhs = self.session.get_first_odor_sniffs(odor, concentration)
         t_0s_ms = self.session.samples_to_millis(inhs)
-        starts = t_0s_ms - pre_ms
-        size = int(pre_ms + post_ms)
-        return self.get_rasters_ms(starts, size)
+        return self.get_rasters_ms(t_0s_ms, pre_ms, post_ms)
 
     def plot_odor_rasters(self, odor, concentration, pre_ms, post_ms, sniff_overlay=False, axis=None,
                           quick_plot=True, color=None, alpha=1, offset=0, markersize=.5):
@@ -78,24 +77,24 @@ class OdorUnit(Unit):
         :param markersize: size of marker to use for plotting.
         :return: plot axis
         """
+        inhs, exhs = self.session.get_first_odor_sniffs(odor, concentration)
+        inhs_ms, exhs_ms = map(self.session.samples_to_millis, (inhs, exhs))
 
-        rasters = self.get_odor_rasters(odor, concentration, pre_ms, post_ms)
-        x = np.arange(-pre_ms, post_ms)
         if sniff_overlay:
-            from matplotlib.patches import Polygon, PathPatch
-            inhs, exhs = self.session.get_first_odor_sniffs(odor, concentration)
-            n_tr, _ = rasters.shape
+
+            n_tr = len(inhs)
             diffs_samp = exhs - inhs
             diffs_ms = self.session.samples_to_millis(diffs_samp)
             order = np.argsort(diffs_ms)
+            inhs_ms, exhs_ms = [x[order] for x in (inhs_ms, exhs_ms)]
             diffs_ms_ordered = diffs_ms[order]
             points = [(0, 1)]  # start at trial 1, not 0 consistent with how we're plotting the rasters.
             points.extend([(diffs_ms_ordered[x], x + 1) for x in range(n_tr)])
             points.append((0, n_tr))
             poly = Polygon(points, color='g', alpha=.25)
             # TODO: polygon is having trouble covering the points of trial 1. not sure why.
-            rasters = rasters[order]
-        ax = self.plot_rasters(rasters, x, axis=axis, quick_plot=quick_plot, color=color, alpha=alpha,
+        rasters = self.get_rasters_ms(inhs_ms, pre_ms, post_ms)
+        ax = self.plot_rasters(rasters, axis=axis, quick_plot=quick_plot, color=color, alpha=alpha,
                                offset=offset, markersize=markersize)
         if sniff_overlay:
             ax.add_patch(poly)
@@ -134,7 +133,7 @@ class OdorUnit(Unit):
         allspikes = []
         alltrials = []
         for i in range(ntrials):
-            t_0 = inhs[i]
+            t_0 = inhs[i] # + self.session.millis_to_samples(50.)
             st = t_0 - pre  # constant.
             s = scalars[i]
             spikes = (self.get_epoch_samples(st, t_0 + post / s) - st).astype(
@@ -146,8 +145,10 @@ class OdorUnit(Unit):
         allspikes = np.concatenate(allspikes)
         alltrials = np.array(alltrials)
         allspikes_ms = self.session.samples_to_millis(allspikes)
-        return self.plot_rasters((alltrials, allspikes_ms, ntrials), axis=axis, quick_plot=quick_plot, color=color, alpha=alpha,
-                                 offset=offset, markersize=markersize)
+        shape = ntrials, (-pre_ms, post_ms)
+        return self.plot_rasters((alltrials, allspikes_ms, shape), axis=axis, quick_plot=quick_plot,
+                                 color=color, alpha=alpha, offset=offset, markersize=markersize)
+
 
 
 class OdorSession(Session):
