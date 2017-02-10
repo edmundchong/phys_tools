@@ -1,0 +1,1 @@
+This is a collection of methods and objects to handle electrophysiology data in the Rinberg lab.
