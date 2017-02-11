@@ -4,6 +4,7 @@ import tables as tb
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
 from scipy.stats import norm
+import os
 
 
 class Unit(ABC):
@@ -19,7 +20,7 @@ class Unit(ABC):
         assert issubclass(type(session), Session)
         self.spiketimes = spiketimes
         self.session = session
-        self.uid = unit_id
+        self.unit_id = unit_id
         self.rating = rating
 
     def get_epoch_samples(self, start: int, end: int) -> np.array:
@@ -248,7 +249,7 @@ class Unit(ABC):
         return axis
 
     def __str__(self):
-        return "Unit {}".format(self.uid)
+        return "{}u{}".format(self.session, self.unit_id)
 
 
 class Session(ABC):
@@ -256,6 +257,7 @@ class Session(ABC):
 
     def __init__(self, dat_file_path, suffix='-1'):
         self.fn_dat = dat_file_path
+        self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)
         fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
         self.filenames = {
             'templates': fn_templates,
@@ -264,7 +266,6 @@ class Session(ABC):
         }
         sk_units = spyking_loaders.load_spiketimes_unstructured(fn_templates, fn_results)
         self._make_units(sk_units)
-
         with tb.open_file(fn_meta, 'r') as f:
             try:
                 self.fs = f.get_node_attr('/', 'acquisition_frequency_hz')
@@ -273,6 +274,8 @@ class Session(ABC):
                 self.fs = 25000.
             self.stimuli = self._make_stimuli(f)
 
+    def __str__(self):
+        return "m{}s{}r{}".format(self.subject_id, self.sess_id, self.rec_id.upper())
 
     def _make_units(self, unit_info, ):
         """
@@ -280,8 +283,26 @@ class Session(ABC):
         """
         numbers, spiketimes, ratings = unit_info
         self._unit_info = {'ids': numbers, 'ratings': ratings}  #save this to use for quicker indexing.
-        self.units = [self.unit_type(i, st, r, self) for i, st, r in zip(numbers, spiketimes, ratings)]
+        self._units = [self.unit_type(i, st, r, self) for i, st, r in zip(numbers, spiketimes, ratings)]
         return
+
+    @staticmethod
+    def _parse_path(path: str) -> tuple:
+        """
+        Parse path structured like .../mouse_XXXX/sess_YYY/Z.dat
+        Xs parsed as subject_id number, Ys are session number, Z is rec name
+
+        :param path: path string to parse. May be relative or absolute.
+        :return (subject_id, session, rec)
+        """
+        if not os.path.isabs(path):
+            path = os.path.join(os.getcwd(), path)
+        a = path.find('mouse_')
+        subject = int(path[a + 6:a + 10])
+        c = path.find('sess_')
+        sessionnumber = int(path[c + 5:c + 8])
+        recname = path[c + 9:c + 10]
+        return subject, sessionnumber, recname
 
     @abstractmethod
     def _make_stimuli(self, meta_file):
@@ -291,27 +312,32 @@ class Session(ABC):
         """
         pass
 
-    def filter_units(self, ratings: list) -> list:
-
+    def units(self, unit_ids=None, ratings=None) -> list:
         """
-        Filters units based ratings.
-        :param ratings: list or range of ratings to include. 5 is A, 1 is F
+        Returns units and can filter units by id or unit ratings. Default behavior is to return all units in the
+        session.
+
+        :param unit_ids: list of units to return (optional: return all units if not specified)
+        :param ratings: list or range of ratings to include. 5 is A, 1 is F (optional, return all units if specified)
         :return: list of units matching this criterion.
         """
-
-        if type(ratings) == int:
-            ratings = [ratings]
-        mask = np.ones(len(self.units), dtype=bool)
-        unit_ratings = self._unit_info['ratings']
-        for r in ratings:
-            mask &= unit_ratings == r
-        if mask.any():
-            w = np.where(mask)[0]
-            units = [self.units[x] for x in w]
-        else:
-            units = []
-
-        return units
+        if not (unit_ids is None or ratings is None):
+            raise ValueError('Only one filter can be applied: unit id or rating')
+        mask = np.ones(len(self._units), dtype=bool)
+        if unit_ids is not None:
+            all_ids = self._unit_info['ids']
+            if type(unit_ids) == int:
+                unit_ids = [unit_ids]
+            for u in unit_ids:
+                mask &= all_ids == u
+        elif ratings is not None:
+            if type(ratings) == int:
+                ratings = [ratings]
+            unit_ratings = self._unit_info['ratings']
+            for r in ratings:
+                mask &= unit_ratings == r
+        w = np.where(mask)[0]
+        return [self._units[x] for x in w]
 
     def filter_units_gte(self, rating: int) -> list:
         """
@@ -323,7 +349,7 @@ class Session(ABC):
         mask = unit_ratings >= rating
         if mask.any():
             w = np.where(mask)[0]
-            units = [self.units[x] for x in w]
+            units = [self._units[x] for x in w]
         else:
             units = []
         return units
