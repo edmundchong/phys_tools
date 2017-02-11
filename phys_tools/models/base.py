@@ -22,6 +22,8 @@ class Unit(ABC):
         self.session = session
         self.unit_id = unit_id
         self.rating = rating
+        self._template = None  # to be loaded on demand by load_template().
+
 
     def get_epoch_samples(self, start: int, end: int) -> np.array:
         """
@@ -113,8 +115,7 @@ class Unit(ABC):
         else:
             sec_per_bin = binsize_ms * n_trials / 1000
         psth_hz = psth / sec_per_bin
-        # print (x)
-        if not axis:
+        if axis is None:
             axis = plt.axes()
         axis.plot(x, psth_hz, label=label, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
         axis.set_ylabel('Firing rate (Hz)')
@@ -251,6 +252,42 @@ class Unit(ABC):
     def __str__(self):
         return "{}u{}".format(self.session, self.unit_id)
 
+    @property
+    def template(self):
+        """only loads template data if/when requested."""
+        if self._template is None:
+            self._template = spyking_loaders.load_templates(self.session.filenames['templates'], self.unit_id)
+        return self._template
+
+    def plot_template(self, x_scale=20, y_scale=2, axis=None, color='b',
+                        alpha=1., linewidth=1, linestyle='-',):
+        """
+
+        :param x_scale:
+        :param y_scale:
+        :param axis:
+        :param color:
+        :param alpha:
+        :param linewidth:
+        :param linestyle:
+        :return:
+        """
+        template = self.template
+        probe_positions = self.session.probe_geometry
+        if probe_positions is None:
+            raise ValueError('Session {} is missing probe geometry. Check for prb file.')
+        assert len(template) == len(probe_positions)
+        if axis is None:
+            axis = plt.axes()
+
+        for i in range(len(template)):
+            waveform = template[i]
+            x_offset, y_offset = probe_positions[i]
+            x = np.linspace(0, x_scale, len(waveform)) + x_offset
+            y = waveform * y_scale + y_offset
+            axis.plot(x, y, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
+        return axis
+
 
 class Session(ABC):
     unit_type = Unit
@@ -259,11 +296,14 @@ class Session(ABC):
         self.fn_dat = dat_file_path
         self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)
         fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
+        fn_probe = spyking_loaders.find_probe_file(dat_file_path)
         self.filenames = {
             'templates': fn_templates,
             'results': fn_results,
-            'meta': fn_meta
+            'meta': fn_meta,
+            'probe': fn_probe
         }
+
         sk_units = spyking_loaders.load_spiketimes_unstructured(fn_templates, fn_results)
         self._make_units(sk_units)
         with tb.open_file(fn_meta, 'r') as f:
@@ -273,6 +313,10 @@ class Session(ABC):
                 print('warning, no fs supplied in meta file. Using default of 25khz')
                 self.fs = 25000.
             self.stimuli = self._make_stimuli(f)
+        if fn_probe:
+            self.probe_geometry = spyking_loaders.load_probe_positions(fn_probe)
+        else:
+            self.probe_geometry = None
 
     def __str__(self):
         return "m{}s{}r{}".format(self.subject_id, self.sess_id, self.rec_id.upper())

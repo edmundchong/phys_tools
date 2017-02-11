@@ -1,7 +1,8 @@
 import tables as tb
 import numpy as np
-import scipy as sp
+from scipy import sparse
 import os
+from glob import glob
 
 
 def make_file_paths(dat_path, suffix='1'):
@@ -21,6 +22,20 @@ def make_file_paths(dat_path, suffix='1'):
         if not os.path.exists(f):
             raise FileNotFoundError(f)
     return templates, result, meta
+
+
+def find_probe_file(dat_path):
+    """ finds probe file in session folder. """
+    prb_file = None
+    basedir, dat = os.path.split(dat_path)
+    prb_files = glob(basedir+'/*.prb')
+    if len(prb_files) == 1:
+        prb_file = prb_files[0]
+    elif len(prb_files) > 1:
+        print('Multiple prb files found in folder: {}, no probe information is available'.format(basedir))
+    elif not prb_files:
+        print('No prb file found in {}'.format(basedir))
+    return prb_file
 
 
 def load_spiketimes(template_fn, results_fn, tag_threshold=1., return_tags=False) -> dict:
@@ -94,7 +109,7 @@ def load_template_ratings(template_fn) -> np.array:
     return tags
 
 
-def load_templates(template_fn):
+def load_templates(template_fn, template_number=None):
     """
     Loads template array *.templates.h5 file. This is the "waveform" used by the template matching algorithm, which is
     stored as a sparse array.
@@ -103,25 +118,30 @@ def load_templates(template_fn):
     (N_electrodes, template_length_samples).
 
     :param template_fn: path to template file
-    :return: dictionary of template arrays.
+    :param template_number: if specified, return single template specified.
+    :return: dictionary of template arrays or a single template 2-d array (N_electrodes, template_length_samples)
+
     """
-    templates = dict()
 
     with tb.open_file(template_fn) as f:
         shp = f.root.temp_shape.read()
-        data = f.root.temp_data.read()
-        x = f.root.temp_x.read()
-        y = f.root.temp_y.read()
+        data = f.root.temp_data.read().ravel()
+        x = f.root.temp_x.read().ravel()
+        y = f.root.temp_y.read().ravel()
 
-    N_elects, N_samps, N_temps = shp  # unpack the shape array.
-    temp_sparse = sp.sparse.csc_matrix((data, (x, y)), shape=(N_elects * N_samps, N_temps))  # make the sparse structure
-
-    for i in range(N_temps):  # unpack the sparse structure into
-        t = temp_sparse[:, i].toarray()
+    N_elects, N_samps, N_temps = [int(x) for x in shp]  # unpack the shape array.
+    temp_sparse = sparse.csc_matrix((data, (x, y)), shape=(N_elects * N_samps, N_temps))  # make the sparse structure
+    if template_number is None:
+        templates = dict()
+        for i in range(N_temps):  # unpack the sparse structure into
+            t = temp_sparse[:, i].toarray()
+            t.shape = (N_elects, N_samps)
+            templates[i] = t
+        return templates
+    else:
+        t = temp_sparse[:, template_number].toarray()
         t.shape = (N_elects, N_samps)
-        templates[i] = t
-
-    return templates
+        return t
 
 
 def load_probe_positions(probe_fn) -> np.array:
