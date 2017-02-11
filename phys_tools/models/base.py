@@ -24,7 +24,6 @@ class Unit(ABC):
         self.rating = rating
         self._template = None  # to be loaded on demand by load_template().
 
-
     def get_epoch_samples(self, start: int, end: int) -> np.array:
         """
         Gets spikes falling between start and end times. Time is specified in samples.
@@ -317,6 +316,7 @@ class Session(ABC):
             self.probe_geometry = spyking_loaders.load_probe_positions(fn_probe)
         else:
             self.probe_geometry = None
+        self._sniff = None  # container for sniff property
 
     def __str__(self):
         return "m{}s{}r{}".format(self.subject_id, self.sess_id, self.rec_id.upper())
@@ -423,3 +423,88 @@ class Session(ABC):
             return times / factor
         else:
             raise ValueError('sorry, samples_to_millis cannot use this datatype.')
+
+    def get_first_odor_sniffs(self, odor: str, concentration):
+        """
+        returns the first inhalations and exhalations of specified odorant.
+
+        :param odor: string specifying odor
+        :param concentration: numeric specifying concentration of odor.
+        :return: tuple (inhalations, exhalations) of arrays.
+        """
+
+        odors = self.stimuli['odors']
+        concs = self.stimuli['odorconcs']
+        inhales = self.stimuli['inhales']
+        exhales = self.stimuli['exhales']
+        odormask = odors == odor
+        concmask = concs == concentration
+        allmask = odormask & concmask
+        idxes = np.where(allmask)[0]
+        first_inhs, first_exhs = [], []
+        for i in idxes:
+            inhs, exhs = inhales[i], exhales[i]
+            if len(inhs) and len(exhs):
+                first_inhs.append(inhs[0])
+                first_exhs.append(exhs[0])
+        return np.array(first_inhs), np.array(first_exhs)
+
+    @property
+    def sniff(self) -> np.array:
+        """
+        loads all sniff samples from the session meta file.
+        """
+        if self._sniff is None:
+            with tb.open_file(self.filenames['meta'], 'r') as f:
+                self._sniff = meta_loaders.load_sniff_trace(f)
+        return self._sniff
+
+    def get_sniff_traces(self, t_0s, pre_ms, post_ms) -> np.ndarray:
+        """
+        Loads and returns sniff sample values around specified sniff t_0s.
+
+        :param t_0s: array or list of t_0s.
+        :param pre_ms: number of ms to return prior to specified t_0s.
+        :param post_ms: number of ms to return after specified t_0s.
+        :return: sniffs in 2d array (Nsniffs, Nsamples) (C-order)
+        """
+
+        pre_samps, post_samps = self.millis_to_samples((pre_ms, post_ms))
+
+        if np.isscalar(t_0s):
+            n_sniffs = 1
+            t_0s = np.array([t_0s])
+        else:
+            n_sniffs = len(t_0s)
+        sniff = self.sniff
+        sniff_mat = np.zeros((n_sniffs, int(pre_samps + post_samps)), dtype=sniff.dtype)
+        for i in range(n_sniffs):
+            t = t_0s[i]
+            st = int(t - pre_samps)
+            nd = int(t + post_samps)
+            sniff_mat[i, :] = sniff[st:nd]
+        return sniff_mat
+
+    def plot_sniffs(self, t_0s, pre_ms, post_ms, axis=None, color='b', alpha=1., linewidth=2, linestyle='-'):
+        """
+        Plots sniff trace around times specified by t_0s (specified in samples)
+
+        :param t_0s: array or list of t_0s specified in *samples*
+        :param pre_ms: number of ms to return prior to specified t_0s.
+        :param post_ms: number of ms to return after specified t_0s.
+        :param axis: existing matplotlib axis on which to plot. Default will create new axis.
+        :param color: matplotlib colorspec for the psth line (ie "k" for a black line)
+        :param alpha: transparency of psth line (float: 1. is opaque, 0. is transparent)
+        :param linewidth: line width for psth plot (float)
+        :param linestyle: matplotlib linespec for psth plot
+        :return:
+        """
+
+        sniffs = self.get_sniff_traces(t_0s, pre_ms, post_ms)
+        x = np.linspace(-pre_ms, post_ms, num=len(sniffs.T))
+        if axis is None:
+            axis = plt.axes()
+        for i in range(len(sniffs)):
+            axis.plot(x, sniffs[i, :], color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha)
+        axis.plot([0] * 2, plt.ylim(), '--k', linewidth=1)
+        return axis
