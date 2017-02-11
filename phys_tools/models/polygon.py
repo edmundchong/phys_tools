@@ -16,6 +16,7 @@ class PatternUnit(Unit):
 
 class PatternSession(Session):
     unit_type = PatternUnit
+
     def __init__(self, dat_file_path, suffix='1'):
         self.sequence_dict = dict()
         self.unique_frames = []
@@ -87,8 +88,6 @@ class PatternSession(Session):
         self.sequence_dict = sequence_dict
 
 
-
-
 class FrameSequence:
     """
     This is essentially a statically typed object, might want to consider moving to cython.
@@ -97,7 +96,7 @@ class FrameSequence:
         """
         Sequence of frames.
 
-        :param frames: tuple of Frame analysis.
+        :param frames: tuple of Frame models.
         :param frametimes: recording time where each frame is presented.
         :param frametimes_relative: This should be the timing of the frames relative to
         inhalation onset. This is used to determine whether the sequence is
