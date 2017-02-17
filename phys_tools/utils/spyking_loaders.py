@@ -52,7 +52,7 @@ def load_spiketimes(template_fn, results_fn, tag_threshold=1., return_tags=False
 
     :param template_fn: path to template file (contains tags)
     :param results_fn: path to results file (contains spike times)
-    :param tag_threshold: loaders templates that are >= this threshold.
+    :param tag_threshold: utils templates that are >= this threshold.
     :return: dictionary of unit spiketimes {unit_numbers: spiketimes}
     """
 

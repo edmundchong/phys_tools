@@ -173,7 +173,7 @@ def load_odor_stims(meta_fn) -> dict:
         fv = f.root.Events.finalvalve.read()
         fv_starts = fv[:, 0]
         fv_ends = fv[:, 1]
-        # loaders inhales/exhales if they are available in the file
+        # utils inhales/exhales if they are available in the file
         inhales, exhales = load_sniff_events(f)
         all_trials = _load_voyeur_trials_by_run(f)
 

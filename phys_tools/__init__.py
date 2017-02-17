@@ -1,2 +1,2 @@
-from .analysis import *
+from . import models
 from . import preprocess

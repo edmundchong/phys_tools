@@ -520,7 +520,7 @@ def _separate_channels(raw_fn, channels, prefix_str, overwrite=False, append=Fal
             for i, fn in enumerate(channel_fns):
                 with open(fn, 'ab') as f:
                     a[:, i].tofile(f)
-            # loaders next block and repeat if it exists.
+            # utils next block and repeat if it exists.
             a = np.fromfile(orig_file, dtype, samples_per_read)
             x = len(a)
 
@@ -563,7 +563,7 @@ def _merge_channels(separate_prefix, channels, save_file_obj, samples_per_read=1
     n_steps = int(np.ceil(n_bytes / stepsize_bytes))
     step_counter = 1
 
-    while seek < n_bytes:  # must do this in blocks because we don't want to loaders all data from all channels.
+    while seek < n_bytes:  # must do this in blocks because we don't want to utils all data from all channels.
         logging.info('merging block {} of {}'.format(step_counter, n_steps))
         step_counter += 1
         for i, fn in enumerate(fns):

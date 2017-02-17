@@ -1,11 +1,13 @@
 import numpy as np
-from phys_tools.loaders import meta_loaders, spyking_loaders
+from phys_tools.utils import meta_loaders, spyking_loaders
 import tables as tb
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
 from scipy.stats import norm
+# from scipy.signal import fftconvolve
+import numba as nb
 import os
-
+import time
 
 class Unit(ABC):
     """
@@ -49,8 +51,63 @@ class Unit(ABC):
         nd = int(self.session.millis_to_samples(t_end))
         return self.session.samples_to_millis(self.get_epoch_samples(st, nd))
 
+    def get_psth_times(self, t_0s, pre_ms, post_ms, binsize_ms, convolve=False):
+        """
+        Returns an array PSTH.
+
+        :param t_0: array of zero times (IN SAMPLES) for the PSTH
+        :param pre_ms: number of ms to plot prior to t_0
+        :param post_ms: number of ms to plot after t_0
+        :param binsize_ms: binsize_ms (in ms)
+        :return: (time_scale_ms, psth in hz)
+        """
+
+        t_0s = np.asarray(t_0s)
+        if not convolve and (pre_ms + post_ms) % binsize_ms:
+            d = (pre_ms + post_ms) % binsize_ms
+            if d > binsize_ms / 2:  # round up or down depending on which side of the bin we're on:
+                post_ms = post_ms + (binsize_ms - d)
+            else:
+                post_ms = post_ms - d
+        binsize_samp = self.session.millis_to_samples(binsize_ms)
+        pre_samp = int(self.session.millis_to_samples(pre_ms))
+        post_samp = int(self.session.millis_to_samples(post_ms))
+        n_samp = pre_samp + post_samp
+        spiketrials, spiketimes, _ = self.get_rasters_samples(t_0s, pre_samp, post_samp)
+
+        if not convolve:
+            binsize = int(binsize_samp)
+            nbins = int(n_samp / binsize_samp)
+            bin_right_edges = [binsize * x - pre_samp for x in range(nbins+1)]
+            psth, _ = np.histogram(spiketimes, bins=bin_right_edges)
+            x = np.linspace(-pre_ms + .5 * binsize_ms, post_ms - .5 * binsize_ms, nbins)
+            assert len(psth) == len(x)
+        else:
+            ss = np.zeros(n_samp, dtype='float32')
+            spiketimes_as_idx = spiketimes + pre_samp
+            assert np.all(spiketimes_as_idx >= 0)
+            for spk in spiketimes_as_idx:  # numba doesn't make this loop quicker under normal cases.
+                ss[spk] += 1.
+            if convolve == 'gaussian':
+                kernel = norm.pdf(np.linspace(-3, 3, binsize_samp)).astype('float32')
+            elif convolve == 'boxcar':
+                kernel = np.ones(binsize_samp, dtype=np.float32)
+            else:
+                raise ValueError("valid convolution parameters are 'gaussian' and 'boxcar'.")
+            psth = np.convolve(ss, kernel, mode='valid')
+            x = np.linspace(-pre_ms + .5 * binsize_ms, post_ms - .5 * binsize_ms, len(psth))
+
+        n_trials = len(t_0s)
+        if convolve:
+            sec_per_bin = kernel.sum() * n_trials / self.session.fs
+        else:
+            sec_per_bin = binsize_ms * n_trials / 1000
+        psth_hz = psth / sec_per_bin
+
+        return x, psth_hz
+
     def plot_psth_times(self, t_0s, pre_ms, post_ms, binsize_ms, axis=None, label='', color=None,
-                        alpha=1., linewidth=2, linestyle='-', convolve=False):
+                        alpha=1., linewidth=2, linestyle='-', convolve=False, setaxislabels=True):
         """
         Note: everything other than description of the zero time is in milliseconds. t_0 is described in samples!
 
@@ -69,61 +126,19 @@ class Unit(ABC):
         :param convolve: default is false. If "gaussan" or "boxcar", use these shaped kernels to make plot instead of histogram.
         :return:
         """
-        t_0s = np.asarray(t_0s)
 
-        if (pre_ms + post_ms) % binsize_ms:
-            d = (pre_ms + post_ms) % binsize_ms
-            if d > binsize_ms / 2:  # round up or down depending on which side of the bin we're on:
-                post_ms = post_ms + (binsize_ms - d)
-            else:
-                post_ms = post_ms - d
-            print('warning the total window size is not divisible by the binsize_ms '
-                  'adjusting the post time to {}.'.format(post_ms))
-
-        binsize_samp = self.session.millis_to_samples(binsize_ms)
-        pre_samp = int(self.session.millis_to_samples(pre_ms))
-        post_samp = int(self.session.millis_to_samples(post_ms))
-        n_samp = pre_samp + post_samp
-
-        spiketrials, spiketimes, _ = self.get_rasters_samples(t_0s, pre_samp, post_samp)
-
-        if not convolve:
-            binsize = int(binsize_samp)
-            nbins = int(n_samp / binsize_samp)
-            bin_right_edges = [binsize * x - pre_samp for x in range(nbins+1)]
-            psth, _ = np.histogram(spiketimes, bins=bin_right_edges)
-            x = np.linspace(-pre_ms + .5 * binsize_ms, post_ms - .5 * binsize_ms, nbins)
-            assert len(psth) == len(x)
-        else:
-            ss = np.zeros(n_samp)
-            for i, j in enumerate(range(-pre_samp, post_samp)):
-                ss[i] = (spiketimes == j).sum()
-            if convolve == 'gaussian':
-                kernel = norm.pdf(np.linspace(-3, 3, int(binsize_ms * self.session.fs/1000)))
-            elif convolve == 'boxcar':
-                kernel = np.ones(binsize_samp)
-            else:
-                raise ValueError("valid convolution parameters are 'gaussian' and 'boxcar'.")
-            psth = np.convolve(ss, kernel, mode='valid')
-            x = np.linspace(-pre_ms + .5 * binsize_ms, post_ms - .5 * binsize_ms, len(psth))
-
-        # scale to Hz
-        n_trials = len(t_0s)
-        if convolve:
-            sec_per_bin = kernel.sum() * n_trials / self.session.fs
-        else:
-            sec_per_bin = binsize_ms * n_trials / 1000
-        psth_hz = psth / sec_per_bin
+        x, psth_hz = self.get_psth_times(t_0s, pre_ms, post_ms, binsize_ms, convolve)
         if axis is None:
             axis = plt.axes()
         axis.plot(x, psth_hz, label=label, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
-        axis.set_ylabel('Firing rate (Hz)')
-        axis.set_xlabel('Time (ms)')
+        if setaxislabels:
+            axis.set_ylabel('Firing rate (Hz)')
+            axis.set_xlabel('Time (ms)')
 
-        if axis.set_ylim()[1] < psth_hz.max():
-            axis.set_ylim((0, psth_hz.max()))
-        else:
-            axis.set_ylim((0, None))
+            if axis.set_ylim()[1] < psth_hz.max():
+                axis.set_ylim((0, psth_hz.max()))
+            else:
+                axis.set_ylim((0, None))
         return axis
 
     def get_rasters_ms(self, t_0s_ms, pre_ms, post_ms) -> (np.array, np.array, tuple):
@@ -168,24 +183,28 @@ class Unit(ABC):
         :param post: number of samples after t0 to return for each trial.
         :return: trial array, spiketimes(samples) array, shape: (ntrials, (t_min, t_max))
         """
+        max_spikes = 10000
+        spiketimes = np.zeros(max_spikes, dtype=np.int)
+        spiketrials = np.zeros(max_spikes, dtype=np.int)
         spikes = self.spiketimes
         nstarts = len(t_0s)
         start_times = t_0s - pre
         size = pre + post
-        spiketimes = []
-        spiketrials = []
         start_times = start_times.astype(np.uint64)
+        c = 0
         for i in range(nstarts):
             st = start_times[i]
-            spike_sub = spikes[(spikes > st) & (spikes < st + size)]
+            i_st, i_stop = np.searchsorted(spikes, [st, st+size])
+            spike_sub = spikes[i_st:i_stop].copy()
+            # spike_sub = spikes[(spikes > st) & (spikes < st + size)].copy()
             spike_sub -= st
-            spike_sub = spike_sub.astype(np.int64) - pre  # uint can't be negative.
-            spiketrials.extend([i]*len(spike_sub))
-            spiketimes.append(spike_sub)
-        spiketimes = np.concatenate(spiketimes)
-        spiketrials = np.array(spiketrials)
+            spike_sub = spike_sub.astype(np.int) - pre  # uint can't be negative.
+            nspikes = len(spike_sub)
+            spiketimes[c:c+nspikes] = spike_sub
+            spiketrials[c:c+nspikes] = i
+            c += nspikes
         shape = (nstarts, (-pre, post))
-        return spiketrials, spiketimes, shape
+        return spiketrials[:c], spiketimes[:c], shape
 
     def plot_rasters(self, rasters, x=None, axis=None, quick_plot=True, color=None, alpha=1, offset=0,
                      markersize=5):
@@ -249,7 +268,7 @@ class Unit(ABC):
         return axis
 
     def __str__(self):
-        return "{}u{}".format(self.session, self.unit_id)
+        return "{}u{:03d}".format(self.session, self.unit_id)
 
     @property
     def template(self):
@@ -281,11 +300,79 @@ class Unit(ABC):
 
         for i in range(len(template)):
             waveform = template[i]
+            # if np.any(waveform):
             x_offset, y_offset = probe_positions[i]
             x = np.linspace(0, x_scale, len(waveform)) + x_offset
             y = waveform * y_scale + y_offset
+
             axis.plot(x, y, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
         return axis
+
+    def plot_autocorrelation(self, binsize_ms=1, range_ms=30, axis=None, color='b'):
+        """
+        Plots autocorellogram for unit. Normalized to all spikes.
+
+
+        :param binsize_ms:
+        :param range_ms:
+        :param axis:
+        :return:
+        """
+
+        range_samp = self.session.millis_to_samples(range_ms)
+        binsize_samp = self.session.millis_to_samples(binsize_ms)
+
+        if range_samp% binsize_samp:
+            range_samp -= range_samp % binsize_samp
+
+        nbins = int(range_samp // binsize_samp)
+        bin_edges_s = np.array([binsize_samp * (x+1) for x in range(nbins)], dtype='uint64')
+        total_spikes = len(self.spiketimes)
+        # seed_indexes = np.random.randint(0,  total_spikes - 1, min((20000, total_spikes // 10)))
+        # seed_indexes = np.arange(0, total_spikes)
+        bins = _autocorrelation(self.spiketimes, bin_edges_s,)
+        bin_edges_ms = self.session.samples_to_millis(bin_edges_s) - 1.
+
+        if axis is None:
+            axis = plt.axes()
+
+        bin_p = bins / total_spikes
+
+        axis.plot(bin_edges_ms, bin_p, drawstyle='steps-post', fillstyle='bottom', color=color)
+        axis.set_xlim(0, None)
+        axis.set_ylim(0, None)
+        return axis
+
+# @nb.jit
+# def _find_idxes(sorted_array, val, st=-1, nd=-1):
+#     if st < 0 and nd < 0:
+#         st = 0, nd = sorted_array
+#     if sorted_array[st] > val and sorted_array[nd]
+
+@nb.jit('int64[:](uint64[:], uint64[:])', cache=True)
+def _autocorrelation(spiketimes, bin_edges, ):
+    nbins = bin_edges.size
+    bins = np.zeros(nbins, dtype='int64')
+    range_samp = bin_edges.max()
+    nspikes = spiketimes.size
+    for i in range(nspikes):
+        seed = spiketimes[i]
+        j = i+1
+        curr = spiketimes[j]
+        dist = curr - seed
+        while dist < range_samp and j < nspikes:
+            # dist = curr - seed
+            notyet = True
+            k = 0
+            while notyet and k < nbins:
+                if dist < bin_edges[k]:
+                    notyet = False
+                    bins[k] += 1
+                k += 1
+            j += 1
+            curr = spiketimes[j]
+            dist = curr - seed
+    return bins
 
 
 class Session(ABC):
@@ -319,7 +406,7 @@ class Session(ABC):
         self._sniff = None  # container for sniff property
 
     def __str__(self):
-        return "m{}s{}r{}".format(self.subject_id, self.sess_id, self.rec_id.upper())
+        return "m{}s{:02d}r{}".format(self.subject_id, self.sess_id, self.rec_id.upper())
 
     def _make_units(self, unit_info, ):
         """
@@ -383,7 +470,7 @@ class Session(ABC):
         w = np.where(mask)[0]
         return [self._units[x] for x in w]
 
-    def filter_units_gte(self, rating: int) -> list:
+    def units_gte(self, rating: int) -> list:
         """
         Filters out units with ratings less than specified.\
         :param rating: integer of the lowest allowable rating. 5 is A, 1 is F

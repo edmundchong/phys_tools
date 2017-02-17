@@ -8,7 +8,7 @@ Loads .continuous, .events, and .spikes files saved from the Open Ephys GUI
 
 Usage:
     import OpenEphys
-    data = OpenEphys.loaders(pathToFile) # returns a dict with data, timestamps, etc.
+    data = OpenEphys.utils(pathToFile) # returns a dict with data, timestamps, etc.
 
 """
 
@@ -46,11 +46,11 @@ def load(filepath):
 
 
 def loadFolder(folderpath, **kwargs):
-    # loaders all continuous files in a folder
+    # utils all continuous files in a folder
 
     data = {}
 
-    # loaders all continuous files in a folder
+    # utils all continuous files in a folder
     if 'channels' in kwargs.keys():
         filelist = ['100_CH' + x + '.continuous' for x in map(str, kwargs['channels'])]
     else:
@@ -297,7 +297,7 @@ def pack(folderpath, source='100', **kwargs):
     #   order: the order in which the .continuos files are packed into the .DAT. should be a list of .continious channel numbers. length must equal total channels.
     #   suffix: appended to .DAT filename, which is openephys.DAT if no suffix provided.
 
-    # loaders the openephys data into memory
+    # utils the openephys data into memory
     if 'data' not in kwargs.keys():
         if 'channels' not in kwargs.keys():
             data = loadFolder(folderpath)

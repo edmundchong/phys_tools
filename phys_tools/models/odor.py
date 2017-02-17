@@ -1,5 +1,5 @@
 from .base import Session, Unit
-from ..loaders import meta_loaders
+from ..utils import meta_loaders
 import tables as tb
 import numpy as np
 import matplotlib.pyplot as plt

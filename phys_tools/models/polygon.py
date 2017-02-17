@@ -1,5 +1,6 @@
 from .base import *
-from ..loaders import meta_loaders
+from ..utils import meta_loaders
+import numpy as np
 
 
 SPOT_FIELD_NAME = 'spots'
@@ -12,16 +13,53 @@ class PatternUnit(Unit):
 
         # TODO: make some good plotting functions.
 
+    def plot_spots(self, pre_ms, post_ms, binsize_ms, axis=None, label='', color=None,
+                   alpha=1., linewidth=2, linestyle='-', convolve='gaussian'):
+        """
+        Plots all the psths for all spots.
+
+        :param pre_ms: number of ms to plot prior to t_0
+        :param post_ms: number of ms to plot after t_0
+        :param binsize_ms: binsize_ms (in ms)
+        :param axis: matplotlib axis on which to plot (optional: otherwise, make new axis)
+        :param label: string for plot legend if wanted
+        :param color: matplotlib colorspec for the psth line (ie "k" for a black line)
+        :param alpha: transparency of psth line (float: 1. is opaque, 0. is transparent)
+        :param linewidth: line width for psth plot (float)
+        :param linestyle: matplotlib linespec for psth plot
+        :param convolve: default is false. If "gaussan" or "boxcar", use these shaped kernels to make plot instead of histogram.
+        :return:
+        """
+        offset = 300.
+        xs = []
+        ys = []
+
+        for seq, times in self.session.sequence_dict.items():
+            if len(seq) == 1 and len(seq.frames) == 1:
+                spot = seq.frames[0].spots[0]
+                p_x = spot.x
+                p_y = spot.y - 3  #TODO THIS IS A STUPID HACK!!!!!!
+                x, psth = self.get_psth_times(times, pre_ms, post_ms, binsize_ms, convolve=convolve)
+                psth -= offset * p_y
+                x += offset * p_x
+                ys.append(psth)
+                xs.append(x)
+                # axis.plot(x[::2], psth[::2], color=color)
+
+        ys = np.asarray(ys)
+        xs = np.asarray(xs)
+        axis.plot(xs.T, ys.T, color=color)
 
 
 class PatternSession(Session):
     unit_type = PatternUnit
 
-    def __init__(self, dat_file_path, suffix='1'):
+    def __init__(self, *args, **kwargs):
         self.sequence_dict = dict()
         self.unique_frames = []
+        self.unique_spots = set()
         self.sequences = []
-        super(PatternSession, self).__init__(dat_file_path, suffix)
+        super(PatternSession, self).__init__(*args, **kwargs)
         with tb.open_file(self.filenames['meta'], 'r') as f:
             self.inhales, self.exhales = meta_loaders.load_sniff_events(f)
 
@@ -43,7 +81,8 @@ class PatternSession(Session):
             spot_size_str = tr[SPOTSIZE_FIELD_NAME].decode()  # decode transforms bytes to str
             if spots_str:
                 laser_spots = meta_loaders.poly_spot_to_list(spots_str)
-                spot_size = meta_loaders.poly_spot_to_list(spot_size_str)[0]
+
+                spot_sizes = meta_loaders.poly_spot_to_list(spot_size_str)
                 nd = allstarts[i + 1]
                 pulse_idxes = np.where((pulse_starts >= st) & (pulse_starts < nd))[0]
                 numpulses = len(pulse_idxes)
@@ -51,7 +90,6 @@ class PatternSession(Session):
                 sequence_times = list()
                 if numpulses - 2 == len(laser_spots):
                     # assert numpulses - 2 == len(laser_spots)
-
                     assert meta_loaders.find_list_depth(laser_spots) < 4
                     # minus 2 for two blank frame pulses, one before and one after the stimulus spots.
                     # even if we are presenting multiple spots in a frame (or pulse), they will be
@@ -62,19 +100,23 @@ class PatternSession(Session):
                         i_frame = j - 1  # the spots start at index 0
                         t_frame = pulse_starts[i_p]
                         spots_frame = laser_spots[i_frame]
+                        spot_size = spot_sizes[i_frame]
                         depth = meta_loaders.find_list_depth(spots_frame)
                         if depth == 1:  # only one spot in frame ([[3,3], [4,4]])
-                            sf = tuple(tuple(spots_frame))  # making tuple because needs to be hashable.
-                            frame = Frame((sf, ), spot_size)
+                            sf = Spot(spots_frame, spot_size)  # making tuple because needs to be hashable.
+                            self.unique_spots.add(sf)
+                            # spots are represented as [y, x]
+                            frame = Frame((sf,))
                         elif depth == 2:
                             spots_frame.sort()  # sort so that we guarantee consistent ordering of spot lists with same spots
-                            sf = tuple([tuple(x) for x in spots_frame])  # make everything tupled.
-                            frame = Frame(sf, spot_size)
+                            sfs = tuple([Spot(x, spot_size) for x in spots_frame])  # make everything tupled.
+                            self.unique_spots.add(*sfs)
+                            frame = Frame(sfs)
                         else:
                             raise ValueError('problem with spot list depth.')
                         sequence_frames.append(frame)
                         sequence_times.append(t_frame)
-                    sequence = FrameSequence(tuple(sequence_frames), tuple(sequence_times))  #TODO: loaders an put frametimes relative in this.
+                    sequence = FrameSequence(tuple(sequence_frames), tuple(sequence_times))  #TODO: utils an put frametimes relative in this.
                     sequence_start_time = sequence_times[0]
                     if sequence in sequence_dict.keys():
                         sequence_dict[sequence].append(sequence_start_time)
@@ -86,6 +128,20 @@ class PatternSession(Session):
                         len(laser_spots), tr['trialNumber'], numpulses
                     ))
         self.sequence_dict = sequence_dict
+
+    def make_spot_axes(self, figure):
+
+        #TODO: make this work to populate the SpatialMapPlot figure axes.
+        #todo: make this determine an offset for the unit.plot_spots function...
+        xs = set()  # todo: cache this as property.s
+        ys = set()
+        for i in self.unique_spots:
+            xs.add(i.x)
+            ys.add(i.y)
+        xcor = min(xs)
+        ycor = min(ys)
+        n_x = len(xs) - xcor
+        n_y = len(ys) - ycor
 
 
 class FrameSequence:
@@ -128,14 +184,15 @@ class FrameSequence:
         #todo: framesequence iterability functional
         pass
 
-
+    def __len__(self):
+        return len(self.frames)
 
 
 class Frame:
     """
     Frames are sparsely defined boolean matrices that were projected onto the brain using a DMD.
     """
-    def __init__(self, spots: tuple, spotsize:int):
+    def __init__(self, spots: tuple):
         """
         Frames are made up of spots. For now, spots are simply tuples expressing cartesian coordinates
         of the spot (x, y).
@@ -149,10 +206,9 @@ class Frame:
         :param spotsize: size of spots (in DMD pixels)
         """
         assert type(spots) == tuple
-        assert all([type(x) == tuple for x in spots])
         self.spots = spots
-        self.size = spotsize
         # todo store matrix dimensions for use making compact representation.
+
     def __hash__(self):
         return hash(self.spots)
 
@@ -163,4 +219,25 @@ class Frame:
         #  todo:  return frame as bool matrix
         pass
 
+    def __len__(self):
+        return len(self.spots)
 
+
+class Spot:
+    """basic unit of pattern stim ephys frame,"""
+
+    def __init__(self, coordinates: tuple, size):
+        """
+        :param coordinates: tuple of
+        :param size:
+        """
+        self.y, self.x = coordinates  # note that this is flipped from sanity.
+        # smaller y is anterior
+        # smaller x is to the left
+        self.size = size
+
+    def __hash__(self):
+        return hash((self.x, self.y, self.size))
+
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y and self.size == other.size
