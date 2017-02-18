@@ -191,12 +191,19 @@ class Unit(ABC):
         start_times = t_0s - pre
         size = pre + post
         start_times = start_times.astype(np.uint64)
+        stop_times = start_times+size
+        all_times_interleaved = np.zeros(nstarts*2, np.uint64)  # I want to make one call to searchsorted
+        for i in range(nstarts):  # alternate start times and end times in the same array.
+            all_times_interleaved[i*2] = start_times[i]
+            all_times_interleaved[i*2+1] = stop_times[i]
+        i_start_stops = np.searchsorted(spikes, all_times_interleaved) # binary search of all values is much!! faster.
         c = 0
         for i in range(nstarts):
             st = start_times[i]
-            i_st, i_stop = np.searchsorted(spikes, [st, st+size])
+            i_st = i_start_stops[i*2]
+            i_stop = i_start_stops[i*2+1]
             spike_sub = spikes[i_st:i_stop].copy()
-            # spike_sub = spikes[(spikes > st) & (spikes < st + size)].copy()
+            # spike_sub = spikes[(spikes > st) & (spikes < st + size)].copy()  # this is very slow.
             spike_sub -= st
             spike_sub = spike_sub.astype(np.int) - pre  # uint can't be negative.
             nspikes = len(spike_sub)

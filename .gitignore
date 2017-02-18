@@ -512,4 +512,4 @@ CMakeLists.txt.user*
 /phys_tools/wip/
 /phys_tools/wip/*
 
-#/ephys_tools2/analysis/odor.py
+#/ephys_tools2/models/odor.py
