@@ -1,3 +1,4 @@
+import os
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
@@ -5,9 +6,7 @@ from phys_tools.models import PatternSession
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.pyplot import get_cmap, subplots
-# import seaborn as sns
-# import pyqtgraph as pg
-import time as time
+import numpy as np
 
 COLORS = get_cmap('Vega10').colors
 
@@ -74,30 +73,71 @@ class StimuliViewer(QWidget):
 
 class SpatialMapViewer(QWidget):
     def __init__(self, parent):
+        self._current_units = []
         super(SpatialMapViewer, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QHBoxLayout(self)
         self.plot = SpatialMapPlot(self)
         layout.addWidget(self.plot)
 
+        controls_layout = QVBoxLayout()
+        pre_pad_label = QLabel('Pre plot (ms)')
+        pre_pad_box = QSpinBox(self)
+        pre_pad_box.setSingleStep(20)
+        pre_pad_box.setRange(0, 2000)
+        pre_pad_box.setValue(100)
+        pre_pad_box.valueChanged.connect(self.plot_param_changed)
+        self.pre_pad_box = pre_pad_box
+
+        post_pad_label = QLabel('Post plot (ms)')
+        post_pad_box = QSpinBox(self)
+        post_pad_box.setSingleStep(20)
+        post_pad_box.setRange(0, 2000)
+        post_pad_box.setValue(200)
+        post_pad_box.valueChanged.connect(self.plot_param_changed)
+        self.post_pad_box = post_pad_box
+
+        binsize_label = QLabel('Binsize (ms)')
+        binsize_box = QSpinBox(self)
+        binsize_box.setSingleStep(1)
+        binsize_box.setRange(1, 200)
+        binsize_box.setValue(20)
+        binsize_box.valueChanged.connect(self.plot_param_changed)
+        self.binsize_box = binsize_box
+
+        controls_layout.addWidget(pre_pad_label)
+        controls_layout.addWidget(pre_pad_box)
+        controls_layout.addWidget(post_pad_label)
+        controls_layout.addWidget(post_pad_box)
+        controls_layout.addWidget(binsize_label)
+        controls_layout.addWidget(binsize_box)
+        controls_layout.addStretch()
+
+        layout.addLayout(controls_layout)
+
+
+    @pyqtSlot(int)
+    def plot_param_changed(self, _):
+        self.update_units(self._current_units)
+
     @pyqtSlot(list)
     def update_units(self, units):
         self.plot.clr()
-        t = time.time()
+        self._current_units = units
+        pre, pst, bs = self.pre_pad_box.value(), self.post_pad_box.value(), self.binsize_box.value()
         for i, u in enumerate(units):
-            u.plot_spots(100, 200, 25, self.plot.axis, color=COLORS[i % len(COLORS)])
-        t2 = time.time()
-        print(t2 - t)
+            u.plot_spots(pre, pst, bs, self.plot.axis,
+                         color=COLORS[i % len(COLORS)])
         self.plot.draw()
-        print(time.time()-t2)
+
 
 class SpatialMapPlot(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         # fig, axes = subplots(6,6,figsize=(width, height), dpi=dpi, sharex=True, sharey=True)
+        # self.axis = axes  ### DOING SUBPLOTS FOR THIS IS MASSIVELY SLOW!!
         fig = Figure(figsize=(width, height))
         super(SpatialMapPlot, self).__init__(fig)
         self.axis = fig.add_subplot(111)
-        self.axis.plot([843,434525])
         self.setParent(parent)
 
         FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -105,22 +145,3 @@ class SpatialMapPlot(FigureCanvas):
 
     def clr(self):
         self.axis.cla()
-
-# class SpatialMapPlot(pg.PlotWidget):
-#
-#     def __init__(self, parent):
-#
-#         super(SpatialMapPlot, self).__init__(parent, useOpenGL=False)
-#         self.axis = self
-#
-#
-#
-#
-#     def clr(self):
-#         self.clear()
-#         self.disableAutoRange()
-#
-#     def draw(self):
-#         self.enableAutoRange()
-
-

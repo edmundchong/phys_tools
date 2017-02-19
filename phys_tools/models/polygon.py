@@ -38,14 +38,17 @@ class PatternUnit(Unit):
             if len(seq) == 1 and len(seq.frames) == 1:
                 spot = seq.frames[0].spots[0]
                 p_x = spot.x
-                p_y = spot.y - 3  #TODO THIS IS A STUPID HACK!!!!!!
+                p_y = spot.y - 3  #TODO THIS IS A STUPID HACK TO CORRECT OFFSET!!!!!!
                 x, psth = self.get_psth_times(times, pre_ms, post_ms, binsize_ms, convolve=convolve)
-                psth -= offset * p_y
-                x += offset * p_x
+                o_y = -offset * p_y
+                o_x = offset * p_x
+                psth += o_y
+                x += o_x
                 ys.append(psth)
                 xs.append(x)
-                # axis.plot(x[::2], psth[::2], color=color)
-
+                mx, mn = x.max(), x.min()
+                axis.plot([mx, mn], [o_y] * 2, color='k', linewidth=1)
+                axis.plot([o_x]*2, [o_y, o_y+100], color='k', linewidth=2)
         ys = np.asarray(ys)
         xs = np.asarray(xs)
         axis.plot(xs.T, ys.T, color=color)
