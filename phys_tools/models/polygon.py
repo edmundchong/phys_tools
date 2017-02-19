@@ -14,7 +14,7 @@ class PatternUnit(Unit):
         # TODO: make some good plotting functions.
 
     def plot_spots(self, pre_ms, post_ms, binsize_ms, axis=None, label='', color=None,
-                   alpha=1., linewidth=2, linestyle='-', convolve='gaussian'):
+                   alpha=.9, linewidth=2, linestyle='-', convolve='gaussian'):
         """
         Plots all the psths for all spots.
 
@@ -30,7 +30,8 @@ class PatternUnit(Unit):
         :param convolve: default is false. If "gaussan" or "boxcar", use these shaped kernels to make plot instead of histogram.
         :return:
         """
-        offset = 300.
+        offset_x = (pre_ms + post_ms) * 1.05
+        offset_y = 200.
         xs = []
         ys = []
 
@@ -40,8 +41,8 @@ class PatternUnit(Unit):
                 p_x = spot.x
                 p_y = spot.y - 3  #TODO THIS IS A STUPID HACK TO CORRECT OFFSET!!!!!!
                 x, psth = self.get_psth_times(times, pre_ms, post_ms, binsize_ms, convolve=convolve)
-                o_y = -offset * p_y
-                o_x = offset * p_x
+                o_y = -offset_y * p_y
+                o_x = offset_x * p_x
                 psth += o_y
                 x += o_x
                 ys.append(psth)
@@ -51,7 +52,7 @@ class PatternUnit(Unit):
                 axis.plot([o_x]*2, [o_y, o_y+100], color='k', linewidth=2)
         ys = np.asarray(ys)
         xs = np.asarray(xs)
-        axis.plot(xs.T, ys.T, color=color)
+        axis.plot(xs.T, ys.T, color=color, alpha=alpha)
 
 
 class PatternSession(Session):
@@ -131,20 +132,6 @@ class PatternSession(Session):
                         len(laser_spots), tr['trialNumber'], numpulses
                     ))
         self.sequence_dict = sequence_dict
-
-    def make_spot_axes(self, figure):
-
-        #TODO: make this work to populate the SpatialMapPlot figure axes.
-        #todo: make this determine an offset for the unit.plot_spots function...
-        xs = set()  # todo: cache this as property.s
-        ys = set()
-        for i in self.unique_spots:
-            xs.add(i.x)
-            ys.add(i.y)
-        xcor = min(xs)
-        ycor = min(ys)
-        n_x = len(xs) - xcor
-        n_y = len(ys) - ycor
 
 
 class FrameSequence:

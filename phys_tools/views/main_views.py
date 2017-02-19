@@ -4,26 +4,34 @@ from PyQt5.QtGui import *
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.pyplot import get_cmap
-import numpy as np
+from abc import abstractmethod
 
-startpath = '/Users/chris/Data/ephys_patterns/mouse_9082/sess_001'
+startpath = '/Users/chris/Data/ephys_patterns/mouse_9082/sess_001'  # todo: needs to be moved to config or something.
 COLORS = get_cmap('Vega10').colors
 
-class MainWindow(QMainWindow):
 
+class MainWindow(QMainWindow):
     sessions_opened = pyqtSignal(list)
 
-    def __init__(self, session_model_type, session_view_type):
+    def __init__(self, session_model_type, SessionViewType):
+        """
+        Makes window to display unit and session widgets. Both view and models are customized to match
+        different data found in different sessions using the two parameters.
+
+        :param session_model_type: Session model class (ie OdorSession, PatternSession, etc.)
+        :param session_view_type: Session view QWidget class (ie OdorSessionWidget, PatterSessionWidget)
+        """
         super(MainWindow, self).__init__()
         menu = self.menuBar()
         menu.setNativeMenuBar(False)
+        self.move(30, 30)
         self.make_menu(menu)
-        self.mainwidget = MainWidgetEphys(self, session_model_type, session_view_type)
+        self.mainwidget = MainWidgetEphys(self, session_model_type, SessionViewType)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.sessions_opened.connect(self.mainwidget.open_sessions)
         self.setCentralWidget(self.mainwidget)
         self.setWindowTitle('PatternNav')
-
+        self.resize(1400, 900)
 
     def make_menu(self, menu):
         """makes menu items"""
@@ -40,18 +48,11 @@ class MainWindow(QMainWindow):
         self.sessions_opened.emit(filepaths)
 
 
-
 class MainWidgetEphys(QWidget):
     units_selected = pyqtSignal(list)
     update_unit_list = pyqtSignal(dict)
 
     def __init__(self, parent, session_model_type, SessionViewType):
-        """
-
-        :param parent:
-        :param session_model_type:
-        :param SessionViewType:
-        """
         super(MainWidgetEphys, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._SessionModelType = session_model_type
@@ -61,7 +62,6 @@ class MainWidgetEphys(QWidget):
         self.setBaseSize(self.sizeHint())
 
         main_layout = QHBoxLayout()
-
         selector_layout = QVBoxLayout()
         main_layout.addLayout(selector_layout)
 
@@ -206,10 +206,6 @@ class UnitCharacteristicPlots(FigureCanvas):
             u.plot_template(axis=self.temp_axes, color=c)
         self.draw()
 
-
-
-
-
 class ResponseWidget(QWidget):
     """
     plotting of unit responses.
@@ -242,8 +238,98 @@ class ResponseWidget(QWidget):
         pass
 
 
+class PsthViewWidget(QWidget):
+    """
+    builds gui items for a typical psth display.
+    The update_unit_plots method needs to be writen for the display you're interested in!
+    """
+
+    def __init__(self, parent):
+        self._current_units = []
+        super(PsthViewWidget, self).__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QHBoxLayout(self)
+        self.plot = _PsthPlotCanvas(self)
+        layout.addWidget(self.plot)
+
+        controls_layout = QVBoxLayout()
+        pre_pad_label = QLabel('Pre plot (ms)')
+        pre_pad_box = QSpinBox(self)
+        pre_pad_box.setSingleStep(20)
+        pre_pad_box.setRange(0, 2000)
+        pre_pad_box.setValue(100)
+        pre_pad_box.valueChanged.connect(self.plot_param_changed)
+        self.pre_pad_box = pre_pad_box
+
+        post_pad_label = QLabel('Post plot (ms)')
+        post_pad_box = QSpinBox(self)
+        post_pad_box.setSingleStep(20)
+        post_pad_box.setRange(0, 2000)
+        post_pad_box.setValue(200)
+        post_pad_box.valueChanged.connect(self.plot_param_changed)
+        self.post_pad_box = post_pad_box
+
+        binsize_label = QLabel('Binsize (ms)')
+        binsize_box = QSpinBox(self)
+        binsize_box.setSingleStep(1)
+        binsize_box.setRange(1, 200)
+        binsize_box.setValue(20)
+        binsize_box.valueChanged.connect(self.plot_param_changed)
+        self.binsize_box = binsize_box
+
+        method_label = QLabel('Binning method')
+        method_box = QComboBox(self)
+        method_box.addItems(('gaussian', 'boxcar', 'histogram'))
+        method_box.setInsertPolicy(QComboBox.NoInsert)
+        method_box.activated.connect(self.plot_param_changed)
+        self.method_box = method_box
+        # todo: make controls hideable.
+        controls_layout.addWidget(pre_pad_label)
+        controls_layout.addWidget(pre_pad_box)
+        controls_layout.addWidget(post_pad_label)
+        controls_layout.addWidget(post_pad_box)
+        controls_layout.addWidget(binsize_label)
+        controls_layout.addWidget(binsize_box)
+        controls_layout.addWidget(method_label)
+        controls_layout.addWidget(method_box)
+        controls_layout.addStretch()
+        self.controls_layout = controls_layout
+
+        layout.addLayout(controls_layout)
+
+    @pyqtSlot(int)
+    def plot_param_changed(self, _):
+        self.update_unit_plots(self._current_units)
+
+    @pyqtSlot(list)
+    @abstractmethod
+    def update_unit_plots(self, units):
+
+        raise NotImplementedError('This method needs to be overwritten with logic to plot psths.')
+        # self.plot.clr()
+        # self._current_units = units
+        # mthd = self.method_box.currentText()
+        # pre, pst, bs = self.pre_pad_box.value(), self.post_pad_box.value(), self.binsize_box.value()
+        # for i, u in enumerate(units):
+        #     u.plot_spots(pre, pst, bs, self.plot.axis,
+        #                  color=COLORS[i % len(COLORS)], convolve=mthd)
+        # self.plot.draw()
 
 
+class _PsthPlotCanvas(FigureCanvas):
+    def __init__(self, parent=None, width=5, height=4, dpi=100):
+        # fig, axes = subplots(6,6,figsize=(width, height), dpi=dpi, sharex=True, sharey=True)
+        # self.axis = axes  ### DOING SUBPLOTS FOR THIS IS MASSIVELY SLOW!!
+        fig = Figure(figsize=(width, height))
+        super(_PsthPlotCanvas, self).__init__(fig)
+        self.axis = fig.add_subplot(111)
+        self.setParent(parent)
+
+        FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
+        FigureCanvas.updateGeometry(self)
+
+    def clr(self):
+        self.axis.cla()
 
 def main():
     import sys

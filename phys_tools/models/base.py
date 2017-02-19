@@ -73,35 +73,33 @@ class Unit(ABC):
         pre_samp = int(self.session.millis_to_samples(pre_ms))
         post_samp = int(self.session.millis_to_samples(post_ms))
         n_samp = pre_samp + post_samp
+        n_trials = len(t_0s)
         spiketrials, spiketimes, _ = self.get_rasters_samples(t_0s, pre_samp, post_samp)
 
-        if not convolve:
+        if not convolve or convolve == 'histogram':
             binsize = int(binsize_samp)
             nbins = int(n_samp / binsize_samp)
             bin_right_edges = [binsize * x - pre_samp for x in range(nbins+1)]
             psth, _ = np.histogram(spiketimes, bins=bin_right_edges)
             x = np.linspace(-pre_ms + .5 * binsize_ms, post_ms - .5 * binsize_ms, nbins)
-            assert len(psth) == len(x)
+            sec_per_bin = binsize_ms * n_trials / 1000
+            # assert len(psth) == len(x)  # checks out
         else:
             ss = np.zeros(n_samp, dtype='float32')
             spiketimes_as_idx = spiketimes + pre_samp
-            assert np.all(spiketimes_as_idx >= 0)
+            # assert np.all(spiketimes_as_idx >= 0)  # checks out.
             for spk in spiketimes_as_idx:  # numba doesn't make this loop quicker under normal cases.
                 ss[spk] += 1.
             if convolve == 'gaussian':
                 kernel = norm.pdf(np.linspace(-3, 3, binsize_samp)).astype('float32')
             elif convolve == 'boxcar':
-                kernel = np.ones(binsize_samp, dtype=np.float32)
+                kernel = np.ones(int(binsize_samp), dtype=np.float32)
             else:
                 raise ValueError("valid convolution parameters are 'gaussian' and 'boxcar'.")
             psth = np.convolve(ss, kernel, mode='valid')
+            sec_per_bin = kernel.sum() * n_trials / self.session.fs
             x = np.linspace(-pre_ms + .5 * binsize_ms, post_ms - .5 * binsize_ms, len(psth))
 
-        n_trials = len(t_0s)
-        if convolve:
-            sec_per_bin = kernel.sum() * n_trials / self.session.fs
-        else:
-            sec_per_bin = binsize_ms * n_trials / 1000
         psth_hz = psth / sec_per_bin
 
         return x, psth_hz

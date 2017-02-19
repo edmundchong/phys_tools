@@ -150,12 +150,14 @@ class OdorUnit(Unit):
                                  color=color, alpha=alpha, offset=offset, markersize=markersize)
 
 
-
 class OdorSession(Session):
     unit_type = OdorUnit
 
     def __init__(self, meta_fn):
         super(OdorSession, self).__init__(meta_fn)
+        self._odors = None
+        self._unique_concs = None
+        self._concentrations_by_odor = None
 
     def _make_stimuli(self, meta_file: tb.File) -> dict:
         """
@@ -240,11 +242,14 @@ class OdorSession(Session):
         }
         return result
 
-    def get_odors(self) -> np.array:
+    @property
+    def odors(self) -> np.array:
         """
         Returns all odors found within the session.
         """
-        return np.unique(self.stimuli['odors'])
+        if self._odors is None:
+            self._odors = np.unique(self.stimuli['odors'])
+        return self._odors
 
     def get_concentrations(self, odor: str) -> np.array:
         """
@@ -254,6 +259,14 @@ class OdorSession(Session):
         odormask = odors == odor
         concs = self.stimuli['odorconcs']
         return np.unique(concs[odormask])
+
+    @property
+    def concentrations_by_odor(self) -> dict:
+        if self._concentrations_by_odor is None:
+            self._concentrations_by_odor = {}
+            for o in self.odors:
+                self._concentrations_by_odor[o] = self.get_concentrations(o)
+        return self._concentrations_by_odor
 
     def plot_odor_sniffs(self, odor: str, conc, pre_ms, post_ms, axis=None, separate_plots=False, color='b', alpha=1.,
                          linewidth=2, linestyle='-', ):
@@ -284,3 +297,4 @@ class OdorSession(Session):
             axis = self.plot_sniffs(inhs, pre_ms, post_ms, axis=axis, color=color, alpha=alpha, linestyle=linestyle,
                              linewidth=linewidth)  # will create/return new plot if None is supplied
         return axis
+
