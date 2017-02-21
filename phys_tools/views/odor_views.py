@@ -56,6 +56,7 @@ class StimuliViewer(QWidget):
         self.selected = set()
         self._updating_stim_list = False  # guard for itemChanged when adding items.
         self.setMaximumWidth(300)
+        self.current_odor_set = set()
 
     @pyqtSlot(list)
     def update_session(self, session_set):
@@ -65,23 +66,48 @@ class StimuliViewer(QWidget):
         :return:
         """
         self._updating_stim_list = True
-        self.concs_by_odor_dict.clear()  # need to keep track of which ACTUAL concentration we're working with.
-        if len(session_set) == 0:
-            pass
+        new_odor_set = set()
+        new_odor_concs = dict()
+
         for s in session_set:  # type: OdorSession
-            #TODO: multiple sessions will duplicate the list. Need to check this.
-            for k, v in s.concentrations_by_odor.items():
-                odor_item = QTreeWidgetItem(self.stim_list, [k])
-                odor_item.setExpanded(True)
-                # TODO: color the text.
-                if k not in self.concs_by_odor_dict.keys():
-                    self.concs_by_odor_dict[k] = {}
+            for o, v in s.concentrations_by_odor.items():
                 for c in v:
                     c_str = '{:0.1e}'.format(c)
-                    c_item = QTreeWidgetItem(odor_item, [c_str])
-                    c_item.setFlags(c_item.flags() | Qt.ItemIsUserCheckable)
-                    c_item.setCheckState(0, Qt.Unchecked)
-                    self.concs_by_odor_dict[k][c_str] = c
+                    new_odor_set.add((o, c_str))
+                    new_odor_concs[(o, c_str)] = c
+        # add odors to the odor list view that are not there yet.
+        for o, c_str in new_odor_set.difference(self.current_odor_set):
+            if o not in self.concs_by_odor_dict.keys():
+                self.concs_by_odor_dict[o] = {}
+                odor_item = QTreeWidgetItem(self.stim_list, [o])
+                odor_item.setExpanded(True)
+            else:
+                odor_item = self.stim_list.findItems(o, Qt.MatchFixedString, 0)[0]
+            c_item = QTreeWidgetItem(odor_item, [c_str])
+            c_item.setFlags(c_item.flags() | Qt.ItemIsUserCheckable)
+            c_item.setCheckState(0, Qt.Unchecked)
+            c = new_odor_concs[(o, c_str)]
+            self.concs_by_odor_dict[o][c_str] = c
+            self.current_odor_set.add((o, c_str))
+        # remove concentrations that are not represented in the current sessions.
+        for o, c_str in self.current_odor_set.difference(new_odor_set):
+            _ = self.concs_by_odor_dict[o].pop(c_str)
+            conc_items = self.stim_list.findItems(c_str, Qt.MatchFixedString | Qt.MatchRecursive, 0)
+            for c_item in conc_items:  # type: QTreeWidgetItem
+                if c_item.parent().text(0) == o:
+                    c_item.parent().removeChild(c_item)
+                    del c_item
+            self.current_odor_set.discard((o, c_str))
+        # cleanup unused odor nodes.
+        _to_pop = []
+        for o, v in self.concs_by_odor_dict.items():
+            if not len(v):
+                _to_pop.append(o)
+                odor_item = self.stim_list.findItems(o, Qt.MatchFixedString, 0)[0]  # type: QTreeWidgetItem
+                self.stim_list.invisibleRootItem().removeChild(odor_item)
+                del odor_item
+        for o in _to_pop:  # so that we don't change the size of the dict during iteration.
+            self.concs_by_odor_dict.pop(o)
         self._updating_stim_list = False
 
     @pyqtSlot(QTreeWidgetItem, int)
@@ -106,6 +132,8 @@ class OdorPsthViewWidget(PsthViewWidget):
         self.stim_by_odor = dict()
         self._odor_colors = dict()
         self._i_color = 0
+        self.post_pad_box.setValue(500)
+        self.binsize_box.setValue(70)
 
 
     @pyqtSlot(set)
@@ -120,7 +148,6 @@ class OdorPsthViewWidget(PsthViewWidget):
                 self._i_color += 1
         self.update_unit_plots()
 
-
     @pyqtSlot(list)
     def update_unit_plots(self, units=None):
         self.plot.clr()
@@ -130,7 +157,6 @@ class OdorPsthViewWidget(PsthViewWidget):
             units = self._current_units
         mthd = self.method_box.currentText()
         pre, pst, bs = self.pre_pad_box.value(), self.post_pad_box.value(), self.binsize_box.value()
-
 
         for i, u in enumerate(units):  # type: OdorUnit
             for o, cs in self.stim_by_odor.items():

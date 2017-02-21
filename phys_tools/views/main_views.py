@@ -5,6 +5,8 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.pyplot import get_cmap
 from abc import abstractmethod
+from glob import glob
+import os
 
 startpath = '/Users/chris/Data/ephys_patterns/mouse_9082/sess_001'  # todo: needs to be moved to config or something.
 COLORS = get_cmap('Vega10').colors
@@ -13,7 +15,7 @@ COLORS = get_cmap('Vega10').colors
 class MainWindow(QMainWindow):
     sessions_opened = pyqtSignal(list)
 
-    def __init__(self, session_model_type, SessionViewType):
+    def __init__(self, session_model_type, SessionViewType, windowname=''):
         """
         Makes window to display unit and session widgets. Both view and models are customized to match
         different data found in different sessions using the two parameters.
@@ -27,24 +29,39 @@ class MainWindow(QMainWindow):
         self.move(30, 30)
         self.make_menu(menu)
         self.mainwidget = MainWidgetEphys(self, session_model_type, SessionViewType)
+        sbar = self.statusBar()
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.sessions_opened.connect(self.mainwidget.open_sessions)
         self.setCentralWidget(self.mainwidget)
-        self.setWindowTitle('PatternNav')
+        self.setWindowTitle(windowname)
         self.resize(1400, 900)
 
     def make_menu(self, menu):
         """makes menu items"""
         filemenu = menu.addMenu('&File')
-        open_action = QAction('&Open Sessions', self)
+        open_action = QAction('&Open...', self)
+        open_action.setStatusTip('Open a single session.')
         open_action.triggered.connect(self.open_sessions)
         filemenu.addAction(open_action)
+        open_folder_action = QAction('Open &folder...', self)
+        open_folder_action.setStatusTip('Open all sessions within a folder recursively.')
+        open_folder_action.triggered.connect(self.open_folder)
+        filemenu.addAction(open_folder_action)
 
     @pyqtSlot()
     def open_sessions(self):
         filepaths, _ = QFileDialog.getOpenFileNames(self,
                                                     "Select one or more files to open",
                                                     startpath)
+        self.sessions_opened.emit(filepaths)
+
+    @pyqtSlot()
+    def open_folder(self):
+        folder = QFileDialog.getExistingDirectory(parent=self, caption='Select a folder or folders to open.',
+                                                        directory=startpath)
+
+        #TODO: enable selection of multiple
+        filepaths = glob(os.path.join(folder, '**/*.dat'), recursive=True)
         self.sessions_opened.emit(filepaths)
 
 
@@ -72,9 +89,10 @@ class MainWidgetEphys(QWidget):
 
         self.session_selector = QListWidget(self,)
         self.session_selector.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.session_selector.setMaximumHeight(50)  #todo: set size based on width of rows not pixels
+        self.session_selector.setMaximumHeight(150)  #todo: set size based on width of rows not pixels
         self.session_selector.itemSelectionChanged.connect(self.session_selection_changed)
         self.session_selector.setSelectionMode(QListWidget.ExtendedSelection)
+        self.session_selector.setMaximumWidth(125)
 
         unit_filter_layout = QHBoxLayout()
         unit_filter_label = QLabel('Min. unit rating: ')
@@ -84,7 +102,6 @@ class MainWidgetEphys(QWidget):
         self.unit_filter_spinbox.valueChanged.connect(self.update_units)
         unit_filter_layout.addWidget(unit_filter_label)
         unit_filter_layout.addWidget(self.unit_filter_spinbox,)
-        # unit_filter_layout.addStretch(20)
 
         selector_layout.addWidget(QLabel('Sessions:'))
         selector_layout.addWidget(self.session_selector)
@@ -106,11 +123,15 @@ class MainWidgetEphys(QWidget):
     @pyqtSlot(list)
     def open_sessions(self, filepaths):
         for f in filepaths:
-            s = self._SessionModelType(f)
-            s_str = str(s)
-            self.session_models[s_str] = s
-            s_item = QListWidgetItem(s_str, self.session_selector)
-            s_item.setSelected(True)
+            try:
+                s = self._SessionModelType(f)
+                s_str = str(s)
+                self.session_models[s_str] = s
+                s_item = QListWidgetItem(s_str, self.session_selector)
+                s_item.setSelected(True)
+            except Exception as e:
+                print("File cannot be opened: {}.".format(f, e))
+                print(e)
 
     @pyqtSlot()
     def session_selection_changed(self):
@@ -139,6 +160,7 @@ class UnitListWidget(QListWidget):
         super(UnitListWidget, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.setSelectionMode(self.ExtendedSelection)
+        self.setMaximumWidth(125)
 
     @pyqtSlot(dict)
     def update_list(self, selected_units):

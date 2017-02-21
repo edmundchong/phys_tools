@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QApplication
 def main():
     import sys
     app = QApplication(sys.argv)
-    w = main_views.MainWindow(PatternSession, pattern_views.PatternSessionWidget)
+    w = main_views.MainWindow(PatternSession, pattern_views.PatternSessionWidget, 'patterNavigator')
     w.show()
 
     sys.exit(app.exec_())
