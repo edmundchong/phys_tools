@@ -16,6 +16,21 @@ class OdorUnit(Unit):
     def __init__(self, unit_id, spiketimes: np.ndarray, rating, session):
         super(OdorUnit, self).__init__(unit_id, spiketimes, rating, session)
 
+    def get_odor_psth(self, odor, concentration, pre_ms, post_ms, binsize_ms, convolve=False):
+        """
+        Returns an array PSTH.
+
+        :param odor: odor name (str)
+        :param concentration:
+        :param pre_ms: number of milliseconds prior to inhalation to plot
+        :param post_ms: number of milliseconds after inhalation to plot
+        :param binsize_ms: binsize for histogram
+        :param convolve: default is false. If "gaussan" or "boxcar", use these shaped kernels to make plot instead of histogram.
+        :return: Psth
+        """
+        inhs, exhs = self.session.get_first_odor_sniffs(odor, concentration)
+        return self.get_psth_times(inhs, pre_ms, post_ms, binsize_ms, convolve)
+
     def plot_odor_psth(self, odor, concentration, pre_ms, post_ms, binsize_ms,
                        axis=None, label='', color=None, alpha=1., linewidth=2, linestyle='-',
                        convolve=False):
@@ -35,7 +50,7 @@ class OdorUnit(Unit):
         :param linewidth: line width for psth plot (float)
         :param linestyle: matplotlib linespec for psth plot
         :param convolve: default is false. If "gaussan" or "boxcar", use these shaped kernels to make plot instead of histogram.
-        :return:
+        :return: axis
         """
 
         inhs, exhs = self.session.get_first_odor_sniffs(odor, concentration)

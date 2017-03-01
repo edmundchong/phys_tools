@@ -8,7 +8,7 @@ from abc import abstractmethod
 from glob import glob
 import os
 
-startpath = '/Users/chris/Data/ephys_patterns/mouse_9082/sess_001'  # todo: needs to be moved to config or something.
+startpath = '/Users/chris/Data/'  # todo: needs to be moved to config or something.
 COLORS = get_cmap('Vega10').colors
 
 
@@ -98,7 +98,7 @@ class MainWidgetEphys(QWidget):
         unit_filter_label = QLabel('Min. unit rating: ')
         self.unit_filter_spinbox = QSpinBox(self)
         self.unit_filter_spinbox.setMaximum(5)
-        self.unit_filter_spinbox.setValue(2)
+        self.unit_filter_spinbox.setValue(3)
         self.unit_filter_spinbox.valueChanged.connect(self.update_units)
         unit_filter_layout.addWidget(unit_filter_label)
         unit_filter_layout.addWidget(self.unit_filter_spinbox,)
@@ -212,7 +212,9 @@ class UnitCharacteristicPlots(FigureCanvas):
         fig = Figure(figsize=(width, height), dpi=dpi)
         super(UnitCharacteristicPlots, self).__init__(fig)
         self.acor_axes = fig.add_subplot(121)
+        self.acor_axes.set_title('autocorr')
         self.temp_axes = fig.add_subplot(122)
+        self.temp_axes.set_title('waveform')
         self.setParent(parent)
 
         FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -222,6 +224,8 @@ class UnitCharacteristicPlots(FigureCanvas):
     def update_plots(self, units):
         self.acor_axes.cla()
         self.temp_axes.cla()
+        self.temp_axes.set_title('Waveforms')
+        self.acor_axes.set_title('Autocorr')
         for i, u in enumerate(units):
             c = COLORS[i % len(COLORS)]
             u.plot_autocorrelation(axis=self.acor_axes, color=c)

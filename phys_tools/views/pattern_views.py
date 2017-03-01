@@ -67,9 +67,16 @@ class StimuliViewer(QWidget):
 
 class SpotMapViewWidget(PsthViewWidget):
 
+    def __init__(self, *args, **kwargs):
+        super(SpotMapViewWidget, self).__init__(*args, **kwargs)
+        self.plot.axis.set_axis_off()
+
     @pyqtSlot(list)
     def update_unit_plots(self, units):
-        self.plot.clr()
+
+        self.plot.axis.cla()
+        self.plot.axis.set_axis_off()
+
         self._current_units = units
         mthd = self.method_box.currentText()
         pre, pst, bs = self.pre_pad_box.value(), self.post_pad_box.value(), self.binsize_box.value()

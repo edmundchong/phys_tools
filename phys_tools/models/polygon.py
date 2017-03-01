@@ -14,7 +14,7 @@ class PatternUnit(Unit):
         # TODO: make some good plotting functions.
 
     def plot_spots(self, pre_ms, post_ms, binsize_ms, axis=None, label='', color=None,
-                   alpha=.9, linewidth=2, linestyle='-', convolve='gaussian'):
+                   alpha=.8, linewidth=2, linestyle='-', convolve='gaussian'):
         """
         Plots all the psths for all spots.
 
@@ -48,11 +48,11 @@ class PatternUnit(Unit):
                 ys.append(psth)
                 xs.append(x)
                 mx, mn = x.max(), x.min()
-                axis.plot([mx, mn], [o_y] * 2, color='k', linewidth=1)
-                axis.plot([o_x]*2, [o_y, o_y+100], color='k', linewidth=2)
+                axis.plot([mx, mn], [o_y] * 2, color='k', linewidth=.75)
+                axis.plot([o_x]*2, [o_y, o_y+100], color='k', linewidth=.75)
         ys = np.asarray(ys)
         xs = np.asarray(xs)
-        axis.plot(xs.T, ys.T, color=color, alpha=alpha)
+        axis.plot(xs.T, ys.T, color=color, alpha=alpha, linewidth=2)
 
 
 class PatternSession(Session):

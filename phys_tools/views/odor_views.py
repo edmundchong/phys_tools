@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from phys_tools.models import OdorSession, OdorUnit
 from .main_views import PsthViewWidget, COLORS
+import sip
 
 startpath = '/Users/chris/Data/ephys/stanford_collab/mouse_8521/sess_003'
 
@@ -95,8 +96,9 @@ class StimuliViewer(QWidget):
             conc_items = self.stim_list.findItems(c_str, Qt.MatchFixedString | Qt.MatchRecursive, 0)
             for c_item in conc_items:  # type: QTreeWidgetItem
                 if c_item.parent().text(0) == o:
-                    c_item.parent().removeChild(c_item)
-                    del c_item
+                    sip.delete(c_item)
+                    # c_item.parent().removeChild(c_item)
+                    # del c_item
             self.current_odor_set.discard((o, c_str))
         # cleanup unused odor nodes.
         _to_pop = []
@@ -104,8 +106,9 @@ class StimuliViewer(QWidget):
             if not len(v):
                 _to_pop.append(o)
                 odor_item = self.stim_list.findItems(o, Qt.MatchFixedString, 0)[0]  # type: QTreeWidgetItem
-                self.stim_list.invisibleRootItem().removeChild(odor_item)
-                del odor_item
+                sip.delete(odor_item)
+                # self.stim_list.invisibleRootItem().removeChild(odor_item)
+                # del odor_item
         for o in _to_pop:  # so that we don't change the size of the dict during iteration.
             self.concs_by_odor_dict.pop(o)
         self._updating_stim_list = False
