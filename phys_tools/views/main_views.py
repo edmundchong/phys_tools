@@ -7,9 +7,11 @@ from matplotlib.pyplot import get_cmap
 from abc import abstractmethod
 from glob import glob
 import os
+import sip
 
 startpath = '/Users/chris/Data/'  # todo: needs to be moved to config or something.
 COLORS = get_cmap('Vega10').colors
+LISTWIDTH = 125
 
 
 class MainWindow(QMainWindow):
@@ -27,8 +29,20 @@ class MainWindow(QMainWindow):
         menu = self.menuBar()
         menu.setNativeMenuBar(False)
         self.move(30, 30)
-        self.make_menu(menu)
         self.mainwidget = MainWidgetEphys(self, session_model_type, SessionViewType)
+        self.unit_sub_dock = QDockWidget('Subset Editor', self)
+        self.unit_subset = UnitSubsetWidget()
+        self.unit_sub_dock.setWidget(self.unit_subset)
+        self.unit_sub_dock.hide()
+        self.unit_sub_dock.setFeatures(QDockWidget.DockWidgetClosable)
+        self.mainwidget.unit_list_widget.addtosubset.connect(self.unit_subset.list.addKeyEvent)
+        self.unit_subset.list.selection_changed_list.connect(
+            self.mainwidget.unit_list_widget.select_external
+        )
+
+        self.addDockWidget(Qt.RightDockWidgetArea, self.unit_sub_dock)
+        self.make_menu(menu)
+
         sbar = self.statusBar()
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.sessions_opened.connect(self.mainwidget.open_sessions)
@@ -40,13 +54,25 @@ class MainWindow(QMainWindow):
         """makes menu items"""
         filemenu = menu.addMenu('&File')
         open_action = QAction('&Open...', self)
+        open_action.setShortcut(QKeySequence("Ctrl+O"))
         open_action.setStatusTip('Open a single session.')
         open_action.triggered.connect(self.open_sessions)
         filemenu.addAction(open_action)
         open_folder_action = QAction('Open &folder...', self)
+        open_folder_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
         open_folder_action.setStatusTip('Open all sessions within a folder recursively.')
         open_folder_action.triggered.connect(self.open_folder)
         filemenu.addAction(open_folder_action)
+
+        toolmenu = menu.addMenu('Subset')
+        act = self.unit_sub_dock.toggleViewAction()  # type: QAction
+        act.setText('Open subset list')
+        act.setShortcut(QKeySequence('Ctrl+Shift+S'))
+        toolmenu.addAction(act)
+        subset_save = QAction('Save subset...', self)
+        subset_save.setShortcut("Ctrl+S")
+        subset_save.triggered.connect(self.unit_subset.save_list)
+        toolmenu.addAction(subset_save)
 
     @pyqtSlot()
     def open_sessions(self):
@@ -92,9 +118,10 @@ class MainWidgetEphys(QWidget):
         self.session_selector.setMaximumHeight(150)  #todo: set size based on width of rows not pixels
         self.session_selector.itemSelectionChanged.connect(self.session_selection_changed)
         self.session_selector.setSelectionMode(QListWidget.ExtendedSelection)
-        self.session_selector.setMaximumWidth(125)
+        self.session_selector.setMaximumWidth(LISTWIDTH)
 
         unit_filter_layout = QHBoxLayout()
+        unit_filter_layout.setSpacing(0)
         unit_filter_label = QLabel('Min. unit rating: ')
         self.unit_filter_spinbox = QSpinBox(self)
         self.unit_filter_spinbox.setMaximum(5)
@@ -122,6 +149,8 @@ class MainWidgetEphys(QWidget):
 
     @pyqtSlot(list)
     def open_sessions(self, filepaths):
+        errors = 0
+        self.parent().setStatusTip('Opening {} files...'.format(len(filepaths)))
         for f in filepaths:
             try:
                 s = self._SessionModelType(f)
@@ -132,6 +161,13 @@ class MainWidgetEphys(QWidget):
             except Exception as e:
                 print("File cannot be opened: {}.".format(f, e))
                 print(e)
+                errors += 1
+        if errors:
+            self.parent().setStatusTip(
+                '{} of {} files could not be opened due to errors. Check log.'.format(errors, len(filepaths))
+            )
+        else:
+            self.parent().setStatusTip('Complete.')
 
     @pyqtSlot()
     def session_selection_changed(self):
@@ -155,19 +191,113 @@ class MainWidgetEphys(QWidget):
 
 
 class UnitListWidget(QListWidget):
+    addtosubset = pyqtSignal(list)
+
     def __init__(self, parent):
         self.unit_models = []
         super(UnitListWidget, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.setSelectionMode(self.ExtendedSelection)
-        self.setMaximumWidth(125)
+        self.setMaximumWidth(LISTWIDTH)
+        self.setDragDropMode(QListWidget.DragOnly)
+        self.setStatusTip("Press 's' to add unit to subset")
+        self.itemActivated.connect(self._itemActivated)
 
     @pyqtSlot(dict)
-    def update_list(self, selected_units):
+    def update_list(self, selected_units: dict):
         unit_strings = list(selected_units.keys())
         unit_strings.sort()
         self.clear()
         self.addItems(unit_strings)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key_S:
+            self.addtosubset.emit(self.selectedItems())
+        else:
+            super(UnitListWidget, self).keyPressEvent(event)
+
+    @pyqtSlot(list)
+    def select_external(self, item_list: list):
+        self.clearSelection()
+        for it in item_list:
+            myitem = self.findItems(it.text(), Qt.MatchFixedString)[0]  # type: QListWidgetItem # this should always be true.
+            if not myitem.isSelected():
+                myitem.setSelected(True)
+
+    @pyqtSlot(QListWidgetItem)
+    def _itemActivated(self, item):
+        self.addtosubset.emit([item])
+
+
+class UnitSubsetWidget(QWidget):
+    def __init__(self, parent=None):
+        super(UnitSubsetWidget, self).__init__(parent)
+        self.list = UnitSubsetList(self)
+        self.savebutton = QPushButton('Save', self)
+        self.savebutton.clicked.connect(self.save_list)
+        self.clearbutton = QPushButton('Clear', self)
+        self.clearbutton.clicked.connect(self.list.clear)
+        mainlayout = QVBoxLayout(self)
+        buttonlayout = QHBoxLayout()
+        buttonlayout.setSpacing(0)
+        buttonlayout.addWidget(self.savebutton)
+        buttonlayout.addWidget(self.clearbutton)
+        mainlayout.addWidget(self.list)
+        mainlayout.addLayout(buttonlayout)
+
+    @pyqtSlot()
+    def save_list(self):
+        if self.list.count():
+            filename, _ = QFileDialog.getSaveFileName(self, "select a save path", startpath, filter='JSON (*.json)')
+        # TODO: make save routine.
+        else:
+            self.parent().parent().setStatusTip('No units in subset, please add before saving list.')
+
+    def closeEvent(self, event):
+        self.hide()
+
+
+class UnitSubsetList(QListWidget):
+    selection_changed_list = pyqtSignal(list)
+
+    def __init__(self, parent):
+        super(UnitSubsetList, self).__init__(parent)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setAcceptDrops(True)
+        self.setToolTip('Drag units here from main list.')
+        self.itemSelectionChanged.connect(self._selection_changed)
+        self.setMaximumWidth(LISTWIDTH)
+
+    def dropEvent(self, event: QDropEvent):
+        """
+        Reimplementation to guard against adding duplicate members to the list and prevent dropping into the
+        list from itself.
+        """
+        source = event.source()  # type: QListWidget
+        if source == self:
+            return
+        else:
+            items = source.selectedItems()
+            for item in items:
+                if not self.findItems(item.text(), Qt.MatchFixedString):
+                    event.accept()
+                    self.addItem(item.text())
+
+    @pyqtSlot(list)
+    def addKeyEvent(self, items):
+        for item in items:
+            if not self.findItems(item.text(), Qt.MatchFixedString):
+                self.addItem(item.text())
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            for it in self.selectedItems():  #type: QListWidgetItem
+                sip.delete(it)
+
+    @pyqtSlot()
+    def _selection_changed(self):
+        self.selection_changed_list.emit(self.selectedItems())
 
 
 class UnitWidget(QTabWidget):
@@ -356,15 +486,3 @@ class _PsthPlotCanvas(FigureCanvas):
 
     def clr(self):
         self.axis.cla()
-
-def main():
-    import sys
-    app = QApplication(sys.argv)
-    w = MainWindow()
-    w.show()
-
-    sys.exit(app.exec_())
-
-
-if __name__ == "__main__":
-    main()
