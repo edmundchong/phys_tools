@@ -8,6 +8,8 @@ from abc import abstractmethod
 from glob import glob
 import os
 import sip
+from phys_tools.models.base import Session, Unit
+import json
 
 startpath = '/Users/chris/Data/'  # todo: needs to be moved to config or something.
 COLORS = get_cmap('Vega10').colors
@@ -31,12 +33,12 @@ class MainWindow(QMainWindow):
         self.move(30, 30)
         self.mainwidget = MainWidgetEphys(self, session_model_type, SessionViewType)
         self.unit_sub_dock = QDockWidget('Subset Editor', self)
-        self.unit_subset = UnitSubsetWidget()
-        self.unit_sub_dock.setWidget(self.unit_subset)
+        self.unit_subset_widget = UnitSubsetWidget()
+        self.unit_sub_dock.setWidget(self.unit_subset_widget)
         self.unit_sub_dock.hide()
         self.unit_sub_dock.setFeatures(QDockWidget.DockWidgetClosable)
-        self.mainwidget.unit_list_widget.addtosubset.connect(self.unit_subset.list.addKeyEvent)
-        self.unit_subset.list.selection_changed_list.connect(
+        self.mainwidget.unit_list_widget.addtosubset.connect(self.unit_subset_widget.list.addKeyEvent)
+        self.unit_subset_widget.list.selection_changed_list.connect(
             self.mainwidget.unit_list_widget.select_external
         )
 
@@ -71,7 +73,7 @@ class MainWindow(QMainWindow):
         toolmenu.addAction(act)
         subset_save = QAction('Save subset...', self)
         subset_save.setShortcut("Ctrl+S")
-        subset_save.triggered.connect(self.unit_subset.save_list)
+        subset_save.triggered.connect(self.unit_subset_widget.save_list)
         toolmenu.addAction(subset_save)
 
     @pyqtSlot()
@@ -95,13 +97,14 @@ class MainWidgetEphys(QWidget):
     units_selected = pyqtSignal(list)
     update_unit_list = pyqtSignal(dict)
 
-    def __init__(self, parent, session_model_type, SessionViewType):
+    def __init__(self, parent, session_model_type: Session, SessionViewType):
         super(MainWidgetEphys, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._SessionModelType = session_model_type
         self.session_models = {}
+        self.unit_models = {}  # container for all units in opened sessions. cache these for quick, hashed access
         self.selected_session_models = []
-        self.selected_session_units = {}  # cache these for quick, hashed access.
+        self.selected_session_units = {}  # subset of only units in selected sessions
         self.setBaseSize(self.sizeHint())
 
         main_layout = QHBoxLayout()
@@ -153,11 +156,13 @@ class MainWidgetEphys(QWidget):
         self.parent().setStatusTip('Opening {} files...'.format(len(filepaths)))
         for f in filepaths:
             try:
-                s = self._SessionModelType(f)
+                s = self._SessionModelType(f)  #type: Session
                 s_str = str(s)
                 self.session_models[s_str] = s
                 s_item = QListWidgetItem(s_str, self.session_selector)
                 s_item.setSelected(True)
+                for u in s.units():
+                    self.unit_models[str(u)] = u
             except Exception as e:
                 print("File cannot be opened: {}.".format(f, e))
                 print(e)
@@ -247,11 +252,39 @@ class UnitSubsetWidget(QWidget):
 
     @pyqtSlot()
     def save_list(self):
-        if self.list.count():
-            filename, _ = QFileDialog.getSaveFileName(self, "select a save path", startpath, filter='JSON (*.json)')
-        # TODO: make save routine.
-        else:
+        if not self.list.count():
             self.parent().parent().setStatusTip('No units in subset, please add before saving list.')
+        else:
+            filename, _ = QFileDialog.getSaveFileName(
+                self, "select a save path", startpath, filter='JSON (*.json)'
+            )
+            if not filename:
+                return
+            p = self.parent().parent() #type: MainWindow
+            all_units = p.mainwidget.unit_models
+            units_to_save = []
+            n_units = self.list.count()
+
+            for i in range(n_units):
+                item = self.list.item(i)  #type: QListWidgetItem
+                name = item.text()
+                units_to_save.append(all_units[name])
+            units_to_save.sort()  # this will group the units in order by session.
+            json_dict = {}
+            last_s = None
+            for unit in units_to_save:
+                session = unit.session
+                if session != last_s:
+                    sess_id = str(session)
+                    json_dict[sess_id] = {
+                        'filenames': session.filenames,
+                        'unitIDs': []
+                    }
+                    last_s = session
+                json_dict[sess_id]['unitIDs'].append(str(unit))
+            with open(filename, 'w') as f:  # todo: prompt for overwrite.
+                json.dump(json_dict, f, indent="\t", )
+            self.parent().parent().setStatusTip('Save complete.')
 
     def closeEvent(self, event):
         self.hide()
@@ -349,7 +382,6 @@ class UnitCharacteristicPlots(FigureCanvas):
 
         FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
         FigureCanvas.updateGeometry(self)
-
 
     def update_plots(self, units):
         self.acor_axes.cla()

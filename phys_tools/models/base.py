@@ -4,10 +4,8 @@ import tables as tb
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
 from scipy.stats import norm
-# from scipy.signal import fftconvolve
 import numba as nb
 import os
-import time
 
 class Unit(ABC):
     """
@@ -275,6 +273,12 @@ class Unit(ABC):
     def __str__(self):
         return "{}u{:03d}".format(self.session, self.unit_id)
 
+    def __gt__(self, other):
+        return str(self) > str(other)
+
+    def __lt__(self, other):
+        return not self.__gt__(other)
+
     @property
     def template(self):
         """only loads template data if/when requested."""
@@ -389,6 +393,7 @@ class Session(ABC):
         fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
         fn_probe = spyking_loaders.find_probe_file(dat_file_path)
         self.filenames = {
+            'dat': dat_file_path,
             'templates': fn_templates,
             'results': fn_results,
             'meta': fn_meta,
@@ -412,6 +417,12 @@ class Session(ABC):
 
     def __str__(self):
         return "m{}s{:02d}r{}".format(self.subject_id, self.sess_id, self.rec_id.upper())
+
+    def __gt__(self, other):
+        return str(self) > str(other)
+
+    def __lt__(self, other):
+        return not self.__gt__(other)
 
     def _make_units(self, unit_info, ):
         """
