@@ -64,7 +64,7 @@ class PatternSession(Session):
         self.unique_spots = set()
         self.sequences = []
         super(PatternSession, self).__init__(*args, **kwargs)
-        with tb.open_file(self.filenames['meta'], 'r') as f:
+        with tb.open_file(self.paths['meta'], 'r') as f:
             self.inhales, self.exhales = meta_loaders.load_sniff_events(f)
 
     def _make_stimuli(self, meta_file):

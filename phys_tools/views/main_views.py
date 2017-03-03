@@ -9,7 +9,7 @@ from glob import glob
 import os
 import sip
 from phys_tools.models.base import Session, Unit
-import json
+from phys_tools.utils.json import save_units_json, load_units_json
 
 startpath = '/Users/chris/Data/'  # todo: needs to be moved to config or something.
 COLORS = get_cmap('Vega10').colors
@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
 
         sbar = self.statusBar()
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.sessions_opened.connect(self.mainwidget.open_sessions)
+        self.sessions_opened.connect(self.mainwidget.load_files)
         self.setCentralWidget(self.mainwidget)
         self.setWindowTitle(windowname)
         self.resize(1400, 900)
@@ -151,22 +151,31 @@ class MainWidgetEphys(QWidget):
         self.setLayout(main_layout)
 
     @pyqtSlot(list)
-    def open_sessions(self, filepaths):
+    def load_files(self, filepaths):
         errors = 0
         self.parent().setStatusTip('Opening {} files...'.format(len(filepaths)))
         for f in filepaths:
-            try:
-                s = self._SessionModelType(f)  #type: Session
-                s_str = str(s)
-                self.session_models[s_str] = s
-                s_item = QListWidgetItem(s_str, self.session_selector)
-                s_item.setSelected(True)
-                for u in s.units():
-                    self.unit_models[str(u)] = u
-            except Exception as e:
-                print("File cannot be opened: {}.".format(f, e))
-                print(e)
-                errors += 1
+            if os.path.splitext(f)[-1].lower() == '.json':
+                sessions = load_units_json(f)
+                for s in sessions:
+                    s_str = str(s)
+                    self.session_models[s_str] = s
+                    s_item = QListWidgetItem(s_str, self.session_selector)
+                    s_item.setSelected(True)
+                    for u in s.units():
+                        self.unit_models[str(u)] = u
+            else:
+                try:
+                    s = self._SessionModelType(f)  #type: Session
+                    s_str = str(s)
+                    self.session_models[s_str] = s
+                    s_item = QListWidgetItem(s_str, self.session_selector)
+                    s_item.setSelected(True)
+                    for u in s.units():
+                        self.unit_models[str(u)] = u
+                except Exception as e:
+                    print("File cannot be opened: {}.".format(f, e))
+                    errors += 1
         if errors:
             self.parent().setStatusTip(
                 '{} of {} files could not be opened due to errors. Check log.'.format(errors, len(filepaths))
@@ -269,21 +278,8 @@ class UnitSubsetWidget(QWidget):
                 item = self.list.item(i)  #type: QListWidgetItem
                 name = item.text()
                 units_to_save.append(all_units[name])
-            units_to_save.sort()  # this will group the units in order by session.
-            json_dict = {}
-            last_s = None
-            for unit in units_to_save:
-                session = unit.session
-                if session != last_s:
-                    sess_id = str(session)
-                    json_dict[sess_id] = {
-                        'filenames': session.filenames,
-                        'unitIDs': []
-                    }
-                    last_s = session
-                json_dict[sess_id]['unitIDs'].append(str(unit))
-            with open(filename, 'w') as f:  # todo: prompt for overwrite.
-                json.dump(json_dict, f, indent="\t", )
+
+            save_units_json(filename, units_to_save)
             self.parent().parent().setStatusTip('Save complete.')
 
     def closeEvent(self, event):
@@ -459,7 +455,7 @@ class PsthViewWidget(QWidget):
 
         binsize_label = QLabel('Binsize (ms)')
         binsize_box = QSpinBox(self)
-        binsize_box.setSingleStep(1)
+        binsize_box.setSingleStep(5)
         binsize_box.setRange(1, 200)
         binsize_box.setValue(20)
         binsize_box.valueChanged.connect(self.plot_param_changed)

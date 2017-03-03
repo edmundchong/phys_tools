@@ -19,7 +19,7 @@ class Unit(ABC):
         """
         assert issubclass(type(session), Session)
         self.spiketimes = spiketimes
-        self.session = session
+        self.session = session  # type: Session
         self.unit_id = unit_id
         self.rating = rating
         self._template = None  # to be loaded on demand by load_template().
@@ -283,7 +283,7 @@ class Unit(ABC):
     def template(self):
         """only loads template data if/when requested."""
         if self._template is None:
-            self._template = spyking_loaders.load_templates(self.session.filenames['templates'], self.unit_id)
+            self._template = spyking_loaders.load_templates(self.session.paths['templates'], self.unit_id)
         return self._template
 
     def plot_template(self, x_scale=20, y_scale=2, axis=None, color='b',
@@ -387,19 +387,18 @@ def _autocorrelation(spiketimes, bin_edges, ):
 class Session(ABC):
     unit_type = Unit
 
-    def __init__(self, dat_file_path, suffix='-1'):
-        self.fn_dat = dat_file_path
+    def __init__(self, dat_file_path: str, suffix='-1'):
         self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)
         fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
         fn_probe = spyking_loaders.find_probe_file(dat_file_path)
-        self.filenames = {
+        self.paths = {
             'dat': dat_file_path,
             'templates': fn_templates,
             'results': fn_results,
             'meta': fn_meta,
             'probe': fn_probe
         }
-
+        self._unit_subset = None
         sk_units = spyking_loaders.load_spiketimes_unstructured(fn_templates, fn_results)
         self._make_units(sk_units)
         with tb.open_file(fn_meta, 'r') as f:
@@ -452,12 +451,21 @@ class Session(ABC):
         return subject, sessionnumber, recname
 
     @abstractmethod
-    def _make_stimuli(self, meta_file):
+    def _make_stimuli(self, meta_file: tb.File):
         """
         Class specific - extract the stimuli you are expecting from your file.
         :return:
         """
         pass
+
+    def set_unit_subset(self, unitnums: list):
+        """
+        Sets a subset. Once subset is set, only these units will be returned by units().
+
+        :param unitnums: list of unit numbers (int)
+        """
+        # assert all([type(x) == int for x in unitnums])
+        self._unit_subset = unitnums
 
     def units(self, unit_ids=None, ratings=None) -> list:
         """
@@ -471,18 +479,24 @@ class Session(ABC):
         if not (unit_ids is None or ratings is None):
             raise ValueError('Only one filter can be applied: unit id or rating')
         mask = np.ones(len(self._units), dtype=bool)
+        if self._unit_subset is not None:
+            unit_ids = self._unit_subset
         if unit_ids is not None:
             all_ids = self._unit_info['ids']
             if type(unit_ids) == int:
                 unit_ids = [unit_ids]
+            u_id_mask = np.zeros_like(mask)
             for u in unit_ids:
-                mask &= all_ids == u
+                u_id_mask[all_ids == u] = True
+            mask &= u_id_mask
         elif ratings is not None:
             if type(ratings) == int:
                 ratings = [ratings]
             unit_ratings = self._unit_info['ratings']
+            ratings_mask = np.zeros_like(mask)
             for r in ratings:
-                mask &= unit_ratings == r
+                ratings_mask[unit_ratings == r] = True
+            mask &= ratings_mask
         w = np.where(mask)[0]
         return [self._units[x] for x in w]
 
@@ -494,6 +508,12 @@ class Session(ABC):
         """
         unit_ratings = self._unit_info['ratings']
         mask = unit_ratings >= rating
+        if self._unit_subset is not None:
+            all_ids = self._unit_info['ids']
+            u_id_mask = np.zeros_like(mask)
+            for u in self._unit_subset:
+                u_id_mask[all_ids == u] = True
+            mask &= u_id_mask
         if mask.any():
             w = np.where(mask)[0]
             units = [self._units[x] for x in w]
@@ -558,7 +578,7 @@ class Session(ABC):
         loads all sniff samples from the session meta file.
         """
         if self._sniff is None:
-            with tb.open_file(self.filenames['meta'], 'r') as f:
+            with tb.open_file(self.paths['meta'], 'r') as f:
                 self._sniff = meta_loaders.load_sniff_trace(f)
         return self._sniff
 
