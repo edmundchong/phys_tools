@@ -55,7 +55,6 @@ def load_units_json(json_path: str):
         u_ids = s_val['unitIDs']  # list of ints
 
         s = SType(datfn)
-        print(u_ids)
         s.set_unit_subset(u_ids)  # type: list
         all_units.extend(s.units(u_ids))
         all_sessions.append(s)
