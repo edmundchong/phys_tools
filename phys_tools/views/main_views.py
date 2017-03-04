@@ -3,7 +3,8 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from matplotlib.pyplot import get_cmap
+from matplotlib.axes import Axes
+import matplotlib.pyplot as plt
 from abc import abstractmethod
 from glob import glob
 import os
@@ -12,7 +13,7 @@ from phys_tools.models.base import Session, Unit
 from phys_tools.utils.json import save_units_json, load_units_json
 
 startpath = '/Users/chris/Data/'  # todo: needs to be moved to config or something.
-COLORS = get_cmap('Vega10').colors
+COLORS = plt.get_cmap('Vega10').colors
 LISTWIDTH = 125
 
 
@@ -370,9 +371,9 @@ class UnitCharacteristicPlots(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=None):
         fig = Figure(figsize=(width, height), dpi=dpi)
         super(UnitCharacteristicPlots, self).__init__(fig)
-        self.acor_axes = fig.add_subplot(121)
+        self.acor_axes = fig.add_subplot(121)  # type: Axes
         self.acor_axes.set_title('autocorr')
-        self.temp_axes = fig.add_subplot(122)
+        self.temp_axes = fig.add_subplot(122)  # type: Axes
         self.temp_axes.set_title('waveform')
         self.setParent(parent)
 
@@ -380,14 +381,19 @@ class UnitCharacteristicPlots(FigureCanvas):
         FigureCanvas.updateGeometry(self)
 
     def update_plots(self, units):
+        # TODO: make heatmap if len(units) > ~3
+        # TODO: rescale axis when adding units.
         self.acor_axes.cla()
         self.temp_axes.cla()
         self.temp_axes.set_title('Waveforms')
         self.acor_axes.set_title('Autocorr')
-        for i, u in enumerate(units):
+        for i, u in enumerate(units):  # type: Unit
             c = COLORS[i % len(COLORS)]
             u.plot_autocorrelation(axis=self.acor_axes, color=c)
             u.plot_template(axis=self.temp_axes, color=c)
+        if len(units) == 1:
+            xpos = self.acor_axes.get_xlim()[1] * .8
+            self.acor_axes.text(xpos, 0., "{:0.2f} Hz".format(u.fr))
         self.draw()
 
 class ResponseWidget(QWidget):

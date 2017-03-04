@@ -7,6 +7,7 @@ from scipy.stats import norm
 import numba as nb
 import os
 
+
 class Unit(ABC):
     """
     Container for unit information and related functions.
@@ -23,6 +24,17 @@ class Unit(ABC):
         self.unit_id = unit_id
         self.rating = rating
         self._template = None  # to be loaded on demand by load_template().
+        self.fr = self._calc_fr(spiketimes)
+
+    def _calc_fr(self, spiketimes: np.array) -> float:
+        """
+        Calculates the firing rate (in Hz) for the unit.
+        :return: float firing rate in spikes sec-1
+        """
+        fr_s = np.median(np.diff(spiketimes))
+        fr_hz = self.session.fs / fr_s
+        return fr_hz
+
 
     def get_epoch_samples(self, start: int, end: int) -> np.array:
         """
@@ -399,8 +411,6 @@ class Session(ABC):
             'probe': fn_probe
         }
         self._unit_subset = None
-        sk_units = spyking_loaders.load_spiketimes_unstructured(fn_templates, fn_results)
-        self._make_units(sk_units)
         with tb.open_file(fn_meta, 'r') as f:
             try:
                 self.fs = f.get_node_attr('/', 'acquisition_frequency_hz')
@@ -408,6 +418,8 @@ class Session(ABC):
                 print('warning, no fs supplied in meta file. Using default of 25khz')
                 self.fs = 25000.
             self.stimuli = self._make_stimuli(f)
+        sk_units = spyking_loaders.load_spiketimes_unstructured(fn_templates, fn_results)
+        self._make_units(sk_units)
         if fn_probe:
             self.probe_geometry = spyking_loaders.load_probe_positions(fn_probe)
         else:
