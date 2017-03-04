@@ -13,15 +13,19 @@ EXHALATION_NODE = "/Events/exhalations_{}"
 
 
 class OdorUnit(Unit):
+    """
+    Unit class for unit exposed to odor stimuli.
+    """
     def __init__(self, unit_id, spiketimes: np.ndarray, rating, session):
         super(OdorUnit, self).__init__(unit_id, spiketimes, rating, session)
 
     def get_odor_psth(self, odor, concentration, pre_ms, post_ms, binsize_ms, convolve=False):
         """
-        Returns an array PSTH.
+        Returns an array PSTH. All times are relative to first inhalation of specified odorant at the specified
+        concentration.
 
         :param odor: odor name (str)
-        :param concentration:
+        :param concentration: concentration of odorant.
         :param pre_ms: number of milliseconds prior to inhalation to plot
         :param post_ms: number of milliseconds after inhalation to plot
         :param binsize_ms: binsize for histogram
@@ -39,7 +43,7 @@ class OdorUnit(Unit):
         Wraps the BaseUnit.plot_psth_times function.
 
         :param odor: odor name (str)
-        :param concentration:
+        :param concentration: concentration of odorant.
         :param pre_ms: number of milliseconds prior to inhalation to plot
         :param post_ms: number of milliseconds after inhalation to plot
         :param binsize_ms: binsize for histogram
@@ -57,14 +61,15 @@ class OdorUnit(Unit):
         return self.plot_psth_times(inhs, pre_ms, post_ms, binsize_ms, axis=axis, label=label, color=color,
                                     alpha=alpha, linewidth=linewidth, linestyle=linestyle, convolve=convolve)
 
-    def get_odor_rasters(self, odor, concentration, pre_ms, post_ms):
+    def get_odor_rasters(self, odor: str, concentration: float, pre_ms: float, post_ms: float) -> tuple:
         """
+        Returns raster tuple for trials where specified odor was presented at the specified concentration.
 
-        :param odor:
-        :param concentration:
-        :param pre_ms:
-        :param post_ms:
-        :return:
+        :param odor: odor name (str)
+        :param concentration: concentration of odorant.
+        :param pre_ms: number of milliseconds prior to inhalation to retrieve
+        :param post_ms: number of milliseconds after inhalation to retrieve
+        :return: trial array, spiketimes(ms) array, shape: (ntrials, (t_min, t_max))
         """
         inhs, exhs = self.session.get_first_odor_sniffs(odor, concentration)
         t_0s_ms = self.session.samples_to_millis(inhs)

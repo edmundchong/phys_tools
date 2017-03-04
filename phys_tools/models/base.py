@@ -3,6 +3,7 @@ from phys_tools.utils import meta_loaders, spyking_loaders
 import tables as tb
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 from scipy.stats import norm
 import numba as nb
 import os
@@ -49,7 +50,7 @@ class Unit(ABC):
         mask = (self.spiketimes >= int(start)) & (self.spiketimes <= int(end))
         return self.spiketimes[mask]
 
-    def get_epoch_ms(self, t_start, t_end) -> np.array:
+    def get_epoch_ms(self, t_start: float, t_end: float) -> np.array:
         """
         Return spiketimes in millisecond time base.
         :param t_start: start time in milliseconds from recording start
@@ -137,7 +138,7 @@ class Unit(ABC):
 
         x, psth_hz = self.get_psth_times(t_0s, pre_ms, post_ms, binsize_ms, convolve)
         if axis is None:
-            axis = plt.axes()
+            axis = plt.axes()  #type: Axes
         axis.plot(x, psth_hz, label=label, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
         if setaxislabels:
             axis.set_ylabel('Firing rate (Hz)')
@@ -260,7 +261,7 @@ class Unit(ABC):
         trials += offset + 1  # so we start at trial 1 on the plot and not trial 0.
 
         if axis is None:
-            axis = plt.axes()
+            axis = plt.axes()  #type: Axes
 
         if quick_plot:
             axis.scatter(times, trials, marker='.', c=color, alpha=alpha, s=markersize)
@@ -301,15 +302,19 @@ class Unit(ABC):
     def plot_template(self, x_scale=20, y_scale=2, axis=None, color='b',
                         alpha=1., linewidth=1, linestyle='-',):
         """
+        Plots the template (waveform) for spyking circus sorted spikes across all sites on the probe.
 
-        :param x_scale:
-        :param y_scale:
-        :param axis:
-        :param color:
-        :param alpha:
-        :param linewidth:
-        :param linestyle:
-        :return:
+        Plots are plotted in a scale defined by the .prb file, which is usually in microns.
+
+        :param x_scale: (optional) Number of microns in width to plot each waveform. This doesn't change
+        the origin of the waveform, but it changes how big the waveform is in the x dimension. Default 20
+        :param y_scale: (optional) Scale factor in the y dimension. Default 2
+        :param axis: axis on which to plot
+        :param color: line color for plot
+        :param alpha: line alpha for plot
+        :param linewidth: for plot
+        :param linestyle: for plot
+        :return: axis
         """
         template = self.template
         probe_positions = self.session.probe_geometry
@@ -317,7 +322,7 @@ class Unit(ABC):
             raise ValueError('Session {} is missing probe geometry. Check for prb file.')
         assert len(template) == len(probe_positions)
         if axis is None:
-            axis = plt.axes()
+            axis = plt.axes()  # type: Axes
 
         for i in range(len(template)):
             waveform = template[i]
@@ -333,10 +338,9 @@ class Unit(ABC):
         """
         Plots autocorellogram for unit. Normalized to all spikes.
 
-
-        :param binsize_ms:
-        :param range_ms:
-        :param axis:
+        :param binsize_ms: (optional), size of bins in ms. Default = 1 ms.
+        :param range_ms: (optional) Plot from 0 to range_ms
+        :param axis: (optional) existing axis on which to plot
         :return:
         """
 
@@ -355,7 +359,7 @@ class Unit(ABC):
         bin_edges_ms = self.session.samples_to_millis(bin_edges_s) - 1.
 
         if axis is None:
-            axis = plt.axes()
+            axis = plt.axes()  # type: Axes
 
         bin_p = bins / total_spikes
 
@@ -638,7 +642,7 @@ class Session(ABC):
         sniffs = self.get_sniff_traces(t_0s, pre_ms, post_ms)
         x = np.linspace(-pre_ms, post_ms, num=len(sniffs.T))
         if axis is None:
-            axis = plt.axes()
+            axis = plt.axes() # type: Axes
         for i in range(len(sniffs)):
             axis.plot(x, sniffs[i, :], color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha)
         axis.plot([0] * 2, plt.ylim(), '--k', linewidth=1)
