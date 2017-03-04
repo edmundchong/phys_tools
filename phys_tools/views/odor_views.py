@@ -81,7 +81,9 @@ class StimuliViewer(QWidget):
             if o not in self.concs_by_odor_dict.keys():
                 self.concs_by_odor_dict[o] = {}
                 odor_item = QTreeWidgetItem(self.stim_list, [o])
+                odor_item.setFlags(odor_item.flags() | Qt.ItemIsUserCheckable)
                 odor_item.setExpanded(True)
+                odor_item.setCheckState(0, Qt.Unchecked)
             else:
                 odor_item = self.stim_list.findItems(o, Qt.MatchFixedString, 0)[0]
             c_item = QTreeWidgetItem(odor_item, [c_str])
@@ -97,8 +99,6 @@ class StimuliViewer(QWidget):
             for c_item in conc_items:  # type: QTreeWidgetItem
                 if c_item.parent().text(0) == o:
                     sip.delete(c_item)
-                    # c_item.parent().removeChild(c_item)
-                    # del c_item
             self.current_odor_set.discard((o, c_str))
         # cleanup unused odor nodes.
         _to_pop = []
@@ -107,15 +107,21 @@ class StimuliViewer(QWidget):
                 _to_pop.append(o)
                 odor_item = self.stim_list.findItems(o, Qt.MatchFixedString, 0)[0]  # type: QTreeWidgetItem
                 sip.delete(odor_item)
-                # self.stim_list.invisibleRootItem().removeChild(odor_item)
-                # del odor_item
         for o in _to_pop:  # so that we don't change the size of the dict during iteration.
             self.concs_by_odor_dict.pop(o)
         self._updating_stim_list = False
 
     @pyqtSlot(QTreeWidgetItem, int)
-    def odor_selection_changed(self, item:QTreeWidgetItem, i):
-        if not self._updating_stim_list:
+    def odor_selection_changed(self, item: QTreeWidgetItem, i):
+        if self._updating_stim_list:
+            return
+
+        if item.childCount():
+            checkstate = item.checkState(0)
+            for i in range(item.childCount()):
+                c_item = item.child(i)
+                c_item.setCheckState(0, checkstate)
+        else:
             odr = item.parent().text(0)
             cstr = item.text(0)
             c = self.concs_by_odor_dict[odr][cstr]

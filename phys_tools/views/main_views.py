@@ -29,7 +29,7 @@ class MainWindow(QMainWindow):
         """
         super(MainWindow, self).__init__()
         menu = self.menuBar()
-        menu.setNativeMenuBar(False)
+        # menu.setNativeMenuBar(False)
         self.move(30, 30)
         self.mainwidget = MainWidgetEphys(self, session_model_type, SessionViewType)
         self.unit_sub_dock = QDockWidget('Subset Editor', self)
