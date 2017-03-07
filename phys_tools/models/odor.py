@@ -101,7 +101,6 @@ class OdorUnit(Unit):
         inhs_ms, exhs_ms = map(self.session.samples_to_millis, (inhs, exhs))
 
         if sniff_overlay:
-
             n_tr = len(inhs)
             diffs_samp = exhs - inhs
             diffs_ms = self.session.samples_to_millis(diffs_samp)
@@ -114,11 +113,11 @@ class OdorUnit(Unit):
             poly = Polygon(points, color='g', alpha=.25)
             # TODO: polygon is having trouble covering the points of trial 1. not sure why.
         rasters = self.get_rasters_ms(inhs_ms, pre_ms, post_ms)
-        ax = self.plot_rasters(rasters, axis=axis, quick_plot=quick_plot, color=color, alpha=alpha,
+        ax, n_tr = self.plot_rasters(rasters, axis=axis, quick_plot=quick_plot, color=color, alpha=alpha,
                                offset=offset, markersize=markersize)
         if sniff_overlay:
             ax.add_patch(poly)
-        return ax
+        return ax, n_tr
 
     def plot_odor_rasters_warp(self, odor, concentration, pre_ms, post_ms, sort_sniffs=True, axis=None,
                                quick_plot=True, color=None, alpha=1, offset=0, markersize=5):

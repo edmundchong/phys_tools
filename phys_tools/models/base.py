@@ -223,7 +223,7 @@ class Unit(ABC):
         return spiketrials[:c], spiketimes[:c], shape
 
     def plot_rasters(self, rasters, x=None, axis=None, quick_plot=True, color=None, alpha=1, offset=0,
-                     markersize=5):
+                     markersize=5) -> (Axes, int):
         """
         Plots rasters gotten from get_rasters functions. Rasters are described as a matrix (ntrials, time).
 
@@ -241,7 +241,7 @@ class Unit(ABC):
         :param alpha: transparency of psth line (float: 1. is opaque, 0. is transparent)
         :param offset: used for plotting muliple conditions on same axis.
         :param markersize: size of marker to use for plotting.
-        :return:
+        :return: raster axis, ntrials
         """
 
         if type(rasters) == tuple and len(rasters) == 3:
@@ -266,9 +266,9 @@ class Unit(ABC):
         if quick_plot:
             axis.scatter(times, trials, marker='.', c=color, alpha=alpha, s=markersize)
             plt.xlabel('Time')
-            axis.spines['top'].set_visible(False)
-            axis.spines['right'].set_visible(False)
-            axis.spines['left'].set_visible(False)
+            # axis.spines['top'].set_visible(False)
+            # axis.spines['right'].set_visible(False)
+            # axis.spines['left'].set_visible(False)
             axis.xaxis.set_ticks_position('bottom')
             axis.set_yticks([1, ntrials])
         else:
@@ -281,7 +281,7 @@ class Unit(ABC):
                 axis.set_yticks([])
         if x_min:
             axis.set_xlim([x_min, x_max])
-        return axis
+        return axis, ntrials
 
     def __str__(self):
         return "{}u{:03d}".format(self.session, self.unit_id)

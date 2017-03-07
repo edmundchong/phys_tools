@@ -145,7 +145,7 @@ class MainWidgetEphys(QWidget):
 
         data_layout = QVBoxLayout()
         data_layout.addWidget(self.session_widget)
-        self.unit_widget = UnitWidget(self)
+        self.unit_widget = UnitTabWidget(self)
         self.units_selected.connect(self.unit_widget.update_unit)
         data_layout.addWidget(self.unit_widget)
         main_layout.addLayout(data_layout)
@@ -330,26 +330,28 @@ class UnitSubsetList(QListWidget):
         self.selection_changed_list.emit(self.selectedItems())
 
 
-class UnitWidget(QTabWidget):
-    units_updated = pyqtSignal(list)
+class UnitTabWidget(QTabWidget):
+    """Tabbed widget for display of unit information."""
+    update_graphs = pyqtSignal(list)
 
     def __init__(self, parent):
-        super(UnitWidget, self).__init__(parent)
+        super(UnitTabWidget, self).__init__(parent)
         self.units = []
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(QSize(500,400))
 
         stats_widget = UnitCharacteristicsWidget(self)
-        self.units_updated.connect(stats_widget.update_units)
+        self.update_graphs.connect(stats_widget.update_units)
         self.addTab(stats_widget, 'Statistics')
 
-        response_widget = ResponseWidget(self)
+        response_widget = UnitFrOvertimeWidget(self)
+        self.update_graphs.connect(response_widget.update_units)
         self.addTab(response_widget, 'Response')
 
     @pyqtSlot(list)
     def update_unit(self, units):
         self.units = units
-        self.units_updated.emit(units)
+        self.update_graphs.emit(units)
 
 
 class UnitCharacteristicsWidget(QWidget):
@@ -358,10 +360,17 @@ class UnitCharacteristicsWidget(QWidget):
         main_layout = QHBoxLayout(self)
         self.autocor_widget = UnitCharacteristicPlots(self)
         main_layout.addWidget(self.autocor_widget)
+        self.units = []
+
+    def showEvent(self, e):
+        """update the plots when the tab becomes visible."""
+        self.update_units(self.units)
 
     @pyqtSlot(list)
     def update_units(self, units):
-        self.autocor_widget.update_plots(units)
+        self.units = units
+        if self.isVisible():
+            self.autocor_widget.update_plots(units)
 
 
 class UnitCharacteristicPlots(FigureCanvas):
@@ -396,57 +405,65 @@ class UnitCharacteristicPlots(FigureCanvas):
             self.acor_axes.text(xpos, 0., "{:0.2f} Hz".format(u.fr))
         self.draw()
 
-class ResponseWidget(QWidget):
+class UnitFrOvertimeWidget(QWidget):
     """
     plotting of unit responses.
     """
 
     def __init__(self, parent):
-        super(ResponseWidget, self).__init__(parent)
-        main_layout = QHBoxLayout()
+        super(UnitFrOvertimeWidget, self).__init__(parent)
+        layout = QHBoxLayout(self)
+        self.figure = UnitFrPlots()
+        layout.addWidget(self.figure)
+        self.units = []
 
-        controls_layout = QVBoxLayout()
-        pre_pad_label = QLabel('Pre padding (ms)')
-        pre_pad_box = QSpinBox(self)
+    def showEvent(self, e):
+        """update the plots when the tab becomes visible."""
+        self.update_units(self.units)
 
-        post_pad_label = QLabel('Post padding (ms)')
-        post_pad_box = QSpinBox(self)
+    @pyqtSlot(list)
+    def update_units(self, units):
+        self.units = units
+        if self.isVisible():
+            ax = self.figure.my_axis
+            self.figure.clr()
+            # ax = self.figure.my_axis
+            print(ax)
+            for u in units:  # type: Unit
+                ax.hist(u.spiketimes, histtype='step', bins='auto')
+                ax.set_title('Firing rate over time')
+                ax.set_ylabel('N spikes')
+                ax.set_xlabel('Recording time.')
 
 
-        controls_layout.addWidget(pre_pad_label)
-        controls_layout.addWidget(pre_pad_box)
-        controls_layout.addWidget(post_pad_label)
-        controls_layout.addWidget(post_pad_box)
-        controls_layout.addStretch()
-        main_layout.addLayout(controls_layout)
-        controls_layout.setSizeConstraint(controls_layout.SetFixedSize)
-        main_layout.addStretch()
-        self.setLayout(main_layout)
+class UnitFrPlots(FigureCanvas):
 
-    @pyqtSlot()
-    def update_response(self):
-        pass
+    def __init__(self):
+        fig = Figure()
+        super(UnitFrPlots, self).__init__(fig)
+        self.my_axis = fig.add_subplot(1,1,1)  # type: Axes
+        # self.axis.set_title('Hello!')
+
+    def clr(self):
+        self.my_axis.cla()
 
 
 class PsthViewWidget(QWidget):
-    """
-    builds gui items for a typical psth display.
-    The update_unit_plots method needs to be writen for the display you're interested in!
-    """
+    """Abstract gui item for a typical psth display."""
 
     def __init__(self, parent):
-        self._current_units = []
+        self.current_units = []
         super(PsthViewWidget, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QHBoxLayout(self)
-        self.plot = _PsthPlotCanvas(self)
+        self.plot = _PlotCanvas(self)
         layout.addWidget(self.plot)
 
         controls_layout = QVBoxLayout()
         pre_pad_label = QLabel('Pre plot (ms)')
         pre_pad_box = QSpinBox(self)
         pre_pad_box.setSingleStep(20)
-        pre_pad_box.setRange(0, 2000)
+        pre_pad_box.setRange(0, 5000)
         pre_pad_box.setValue(100)
         pre_pad_box.valueChanged.connect(self.plot_param_changed)
         self.pre_pad_box = pre_pad_box
@@ -454,7 +471,7 @@ class PsthViewWidget(QWidget):
         post_pad_label = QLabel('Post plot (ms)')
         post_pad_box = QSpinBox(self)
         post_pad_box.setSingleStep(20)
-        post_pad_box.setRange(0, 2000)
+        post_pad_box.setRange(0, 5000)
         post_pad_box.setValue(200)
         post_pad_box.valueChanged.connect(self.plot_param_changed)
         self.post_pad_box = post_pad_box
@@ -489,12 +506,14 @@ class PsthViewWidget(QWidget):
 
     @pyqtSlot(int)
     def plot_param_changed(self, _):
-        self.update_unit_plots(self._current_units)
+        self.update_unit_plots(self.current_units)
+
+    def showEvent(self, event: QShowEvent):
+        self.update_unit_plots(self.current_units)
 
     @pyqtSlot(list)
     @abstractmethod
     def update_unit_plots(self, units):
-
         raise NotImplementedError('This method needs to be overwritten with logic to plot psths.')
         # self.plot.clr()
         # self._current_units = units
@@ -506,13 +525,13 @@ class PsthViewWidget(QWidget):
         # self.plot.draw()
 
 
-class _PsthPlotCanvas(FigureCanvas):
+class _PlotCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         # fig, axes = subplots(6,6,figsize=(width, height), dpi=dpi, sharex=True, sharey=True)
         # self.axis = axes  ### DOING SUBPLOTS FOR THIS IS MASSIVELY SLOW!!
         fig = Figure(figsize=(width, height))
-        super(_PsthPlotCanvas, self).__init__(fig)
-        self.axis = fig.add_subplot(111)
+        super(_PlotCanvas, self).__init__(fig)
+        self.axis = fig.add_subplot(111)  # type: Axes
         self.setParent(parent)
 
         FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -520,3 +539,64 @@ class _PsthPlotCanvas(FigureCanvas):
 
     def clr(self):
         self.axis.cla()
+
+
+class RasterViewWidget(QWidget):
+    """Abstract widget to display raster plots."""
+
+    def __init__(self, parent):
+        super(RasterViewWidget, self).__init__(parent)
+        self.current_units = None
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QHBoxLayout(self)
+        self.plot = _PlotCanvas(self)
+        layout.addWidget(self.plot)
+
+        controls_layout = QVBoxLayout()
+        pre_pad_label = QLabel('Pre plot (ms)')
+        pre_pad_box = QSpinBox(self)
+        pre_pad_box.setSingleStep(20)
+        pre_pad_box.setRange(0, 2000)
+        pre_pad_box.setValue(100)
+        pre_pad_box.valueChanged.connect(self.plot_param_changed)
+        self.pre_pad_box = pre_pad_box
+
+        post_pad_label = QLabel('Post plot (ms)')
+        post_pad_box = QSpinBox(self)
+        post_pad_box.setSingleStep(20)
+        post_pad_box.setRange(0, 2000)
+        post_pad_box.setValue(200)
+        post_pad_box.valueChanged.connect(self.plot_param_changed)
+        self.post_pad_box = post_pad_box
+
+        pointsize_label = QLabel('Point size')
+        pointsize = QSpinBox(self)
+        pointsize.setSingleStep(1)
+        pointsize.setRange(1, 20)
+        pointsize.setValue(5)
+        pointsize.valueChanged.connect(self.plot_param_changed)
+        self.pointsize_box = pointsize
+
+
+        # todo: make controls hideable.
+        controls_layout.addWidget(pre_pad_label)
+        controls_layout.addWidget(pre_pad_box)
+        controls_layout.addWidget(post_pad_label)
+        controls_layout.addWidget(post_pad_box)
+        controls_layout.addWidget(pointsize_label)
+        controls_layout.addWidget(pointsize)
+        controls_layout.addStretch()
+        self.controls_layout = controls_layout
+        layout.addLayout(controls_layout)
+
+    def showEvent(self, event: QShowEvent):
+        self.update_unit_plots(self.current_units)
+
+    @pyqtSlot(int)
+    def plot_param_changed(self, _):
+        self.update_unit_plots(self.current_units)
+
+    @pyqtSlot(list)
+    @abstractmethod
+    def update_unit_plots(self, units):
+        raise NotImplementedError('This method needs to be overwritten with logic to plot psths.')

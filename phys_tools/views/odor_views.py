@@ -2,7 +2,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from phys_tools.models import OdorSession, OdorUnit
-from .main_views import PsthViewWidget, COLORS
+from .main_views import PsthViewWidget, RasterViewWidget, COLORS
 import sip
 import numpy as np
 
@@ -22,11 +22,17 @@ class OdorSessionWidget(QWidget):
         self.stimview = StimuliViewer(self)
         self.session_updated.connect(self.stimview.update_session)
         self.odorpsthview = OdorPsthViewWidget(self)
+        self.odorrasterview = OdorRasterWidget(self)
+        self.responsetabwidget = QTabWidget(self)
+        self.responsetabwidget.addTab(self.odorpsthview, "PSTH")
+        self.responsetabwidget.addTab(self.odorrasterview, 'rasters')
         self.unit_updated.connect(self.odorpsthview.update_unit_plots)
+        self.unit_updated.connect(self.odorrasterview.update_unit_plots)
         self.stimview.stim_changed.connect(self.odorpsthview.update_stim_plots)
+        self.stimview.stim_changed.connect(self.odorrasterview.update_stim_plots)
         layout = QHBoxLayout(self)
         layout.addWidget(self.stimview)
-        layout.addWidget(self.odorpsthview)
+        layout.addWidget(self.responsetabwidget)
 
 
     def sizeHint(self):
@@ -44,6 +50,7 @@ class OdorSessionWidget(QWidget):
 
 class StimuliViewer(QWidget):
     stim_changed = pyqtSignal(set)
+
     def __init__(self, parent):
         super(StimuliViewer, self).__init__(parent)
         self._last_session = None
@@ -137,7 +144,6 @@ class StimuliViewer(QWidget):
 
 
 class OdorPsthViewWidget(PsthViewWidget):
-
     def __init__(self, parent):
         super(OdorPsthViewWidget, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -161,26 +167,80 @@ class OdorPsthViewWidget(PsthViewWidget):
                 self._i_color += 1
 
         for o, concs in self.stim_by_odor.items():
-            concs.sort(reverse=False)  # sorts in the dict in place
+            concs.sort(reverse=True)  # sorts in the dict in place
             self._odor_conc_alpha[o] = np.linspace(1., .3, len(concs))
-        self.update_unit_plots()
+        self.update_unit_plots(self.current_units)
 
     @pyqtSlot(list)
-    def update_unit_plots(self, units=None):
-        self.plot.clr()
-        if units is not None:
-            self._current_units = units
-        else:
-            units = self._current_units
-        mthd = self.method_box.currentText()
-        pre, pst, bs = self.pre_pad_box.value(), self.post_pad_box.value(), self.binsize_box.value()
+    def update_unit_plots(self, units):
+        self.current_units = units
+        if self.isVisible():
+            self.plot.clr()
+            mthd = self.method_box.currentText()
+            pre, pst, bs = self.pre_pad_box.value(), self.post_pad_box.value(), self.binsize_box.value()
+            for i, u in enumerate(units):  # type: OdorUnit
+                for o, cs in self.stim_by_odor.items():
+                    color = self._odor_colors[o]
+                    alphas = self._odor_conc_alpha[o]
+                    for alpha, c in zip(alphas, cs):
+                        u.plot_odor_psth(
+                            o, c, pre, pst, bs, self.plot.axis, color=color, convolve=mthd, alpha=alpha
+                        )
+            self.plot.draw()
 
-        for i, u in enumerate(units):  # type: OdorUnit
-            for o, cs in self.stim_by_odor.items():
-                color = self._odor_colors[o]
-                alphas = self._odor_conc_alpha[o]
-                for alpha, c in zip(alphas, cs):
-                    u.plot_odor_psth(
-                        o, c, pre, pst, bs, self.plot.axis, color=color, convolve=mthd, alpha=alpha
-                    )
-        self.plot.draw()
+
+class OdorRasterWidget(RasterViewWidget):
+    """Raster for odor trials."""
+
+    def __init__(self, parent):
+        super(OdorRasterWidget, self).__init__(parent)
+        self.stim_by_odor = {}
+        self._odor_colors = {}
+        self._odor_conc_alpha = {}
+        self._i_color = 0
+
+    @pyqtSlot(set)
+    def update_stim_plots(self, stimset):
+        self.stim_by_odor.clear()
+        self._odor_conc_alpha.clear()
+        for i, (o, c) in enumerate(stimset):
+            if o not in self.stim_by_odor:
+                self.stim_by_odor[o] = []
+            self.stim_by_odor[o].append(c)
+            if o not in self._odor_colors.keys():
+                self._odor_colors[o] = COLORS[self._i_color % len(COLORS)]
+                self._i_color += 1
+
+        for o, concs in self.stim_by_odor.items():
+            concs.sort(reverse=True)  # sorts in the dict in place
+            self._odor_conc_alpha[o] = np.linspace(1., .5, len(concs))
+        self.update_unit_plots(self.current_units)
+
+    @pyqtSlot(list)
+    def update_unit_plots(self, units):
+        if units is not None:
+            if len(units) != 1:
+                if self.isVisible():
+                    self.plot.clr()
+                    self.plot.draw()
+                self.current_units = None
+                return
+            else:
+                self.current_units = units
+                if self.isVisible():
+                    unit = units[0]
+                    self.plot.clr()
+                    pre, pst = self.pre_pad_box.value(), self.post_pad_box.value()
+                    sz = self.pointsize_box.value()
+                    offset = 0
+                    for o, cs in self.stim_by_odor.items():
+                        color = self._odor_colors[o]
+                        alphas = self._odor_conc_alpha[o]
+                        for alpha, c in zip(alphas, cs):
+                            _, ntr = unit.plot_odor_rasters(
+                                o, c, pre, pst, axis=self.plot.axis, color=color, alpha=alpha, offset=offset,
+                                markersize=sz
+                            )
+                            offset += ntr
+                    self.plot.axis.grid(True, alpha=.3)
+                    self.plot.draw()
