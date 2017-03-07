@@ -413,7 +413,7 @@ class UnitFrOvertimeWidget(QWidget):
     def __init__(self, parent):
         super(UnitFrOvertimeWidget, self).__init__(parent)
         layout = QHBoxLayout(self)
-        self.figure = UnitFrPlots()
+        self.figure = _PlotCanvas()
         layout.addWidget(self.figure)
         self.units = []
 
@@ -425,27 +425,14 @@ class UnitFrOvertimeWidget(QWidget):
     def update_units(self, units):
         self.units = units
         if self.isVisible():
-            ax = self.figure.my_axis
-            self.figure.clr()
-            # ax = self.figure.my_axis
-            print(ax)
+            ax = self.figure.axis
+            ax.cla()
             for u in units:  # type: Unit
                 ax.hist(u.spiketimes, histtype='step', bins='auto')
                 ax.set_title('Firing rate over time')
                 ax.set_ylabel('N spikes')
                 ax.set_xlabel('Recording time.')
-
-
-class UnitFrPlots(FigureCanvas):
-
-    def __init__(self):
-        fig = Figure()
-        super(UnitFrPlots, self).__init__(fig)
-        self.my_axis = fig.add_subplot(1,1,1)  # type: Axes
-        # self.axis.set_title('Hello!')
-
-    def clr(self):
-        self.my_axis.cla()
+            self.figure.draw()
 
 
 class PsthViewWidget(QWidget):
@@ -526,6 +513,7 @@ class PsthViewWidget(QWidget):
 
 
 class _PlotCanvas(FigureCanvas):
+    """Plot canvas"""
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         # fig, axes = subplots(6,6,figsize=(width, height), dpi=dpi, sharex=True, sharey=True)
         # self.axis = axes  ### DOING SUBPLOTS FOR THIS IS MASSIVELY SLOW!!
