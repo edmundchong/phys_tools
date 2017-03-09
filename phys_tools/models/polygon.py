@@ -85,8 +85,8 @@ class PatternSession(Session):
             spot_size_str = tr[SPOTSIZE_FIELD_NAME].decode()  # decode transforms bytes to str
             if spots_str:
                 laser_spots = meta_loaders.poly_spot_to_list(spots_str)
-
                 spot_sizes = meta_loaders.poly_spot_to_list(spot_size_str)
+                spot_intensity = float(tr["LaserIntensity_1"].decode().split(' ')[0])
                 nd = allstarts[i + 1]
                 pulse_idxes = np.where((pulse_starts >= st) & (pulse_starts < nd))[0]
                 numpulses = len(pulse_idxes)
@@ -107,13 +107,13 @@ class PatternSession(Session):
                         spot_size = spot_sizes[i_frame]
                         depth = meta_loaders.find_list_depth(spots_frame)
                         if depth == 1:  # only one spot in frame ([[3,3], [4,4]])
-                            sf = Spot(spots_frame, spot_size)  # making tuple because needs to be hashable.
+                            sf = Spot(spots_frame, spot_size, spot_intensity)  # making tuple because needs to be hashable.
                             self.unique_spots.add(sf)
                             # spots are represented as [y, x]
                             frame = Frame((sf,))
                         elif depth == 2:
                             spots_frame.sort()  # sort so that we guarantee consistent ordering of spot lists with same spots
-                            sfs = tuple([Spot(x, spot_size) for x in spots_frame])  # make everything tupled.
+                            sfs = tuple([Spot(x, spot_size, spot_intensity) for x in spots_frame])  # make everything tupled.
                             self.unique_spots.add(*sfs)
                             frame = Frame(sfs)
                         else:
@@ -170,12 +170,14 @@ class FrameSequence:
     def __contains__(self, item):
         return self.frames.__contains__(item)
 
-    def __iter__(self):
-        #todo: framesequence iterability functional
-        pass
-
     def __len__(self):
         return len(self.frames)
+
+    def __getitem__(self, i):
+        return self.frames[i]
+
+    def __iter__(self):
+        return self.frames.__iter__()
 
 
 class Frame:
@@ -212,22 +214,31 @@ class Frame:
     def __len__(self):
         return len(self.spots)
 
+    def __iter__(self):
+        return self.spots.__iter__()
+
+    def __getitem__(self, i):
+        return self.spots[i]
+
 
 class Spot:
     """basic unit of pattern stim ephys frame,"""
 
-    def __init__(self, coordinates: tuple, size):
+    def __init__(self, coordinates: tuple, size: float, intensity: float):
         """
         :param coordinates: tuple of
         :param size:
+        :param intensity: laser intensity in mW mm-2. Taken from LaserIntensity_1 row.
         """
         self.y, self.x = coordinates  # note that this is flipped from sanity.
         # smaller y is anterior
         # smaller x is to the left
         self.size = size
+        self.intensity = intensity
 
     def __hash__(self):
         return hash((self.x, self.y, self.size))
 
     def __eq__(self, other):
-        return self.x == other.x and self.y == other.y and self.size == other.size
+        return self.x == other.x and self.y == other.y and self.size == other.size and \
+               self.intensity == other.intensity
