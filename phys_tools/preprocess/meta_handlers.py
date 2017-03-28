@@ -192,8 +192,6 @@ def findfvopens_MC(stream, *args):
     :param stream: stream to find threshold crossings.
     :return:
     """
-    logging.info('Finding FV opens...')
-
 
     # first determine if our stream is fit better by 1 or two gaussian distributions:
     params = _gaussian_model_comparison(stream)
@@ -214,7 +212,7 @@ def findfvopens_MC(stream, *args):
     else:
 
         fv_opens = np.array([], dtype=np.uint64)
-    logging.info ('Complete. {} FV opens found.'.format(len(fv_opens)))
+    logging.info('Found {} FV opens.'.format(len(fv_opens)))
     return fv_opens
 
 

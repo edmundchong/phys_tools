@@ -27,7 +27,7 @@ RECORD_MARKER = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 255])
 # constants for pre-allocating matrices:
 MAX_NUMBER_OF_SPIKES = int(1e6)
 MAX_NUMBER_OF_RECORDS = int(1e6)
-MAX_NUMBER_OF_CONTINUOUS_SAMPLES = int(2e8)
+MAX_NUMBER_OF_CONTINUOUS_SAMPLES = int(5e8)
 MAX_NUMBER_OF_EVENTS = int(1e6)
 
 
