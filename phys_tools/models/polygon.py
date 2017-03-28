@@ -5,15 +5,18 @@ import numpy as np
 
 SPOT_FIELD_NAME = 'spots'
 SPOTSIZE_FIELD_NAME = 'spotsizes'
+INTENSITY_FIELD_NAME = 'LaserIntensity_MWmm2'  # assuming homogenous intensity for all spots.
 
 
 class PatternUnit(Unit):
+    """Unit from PatternSession"""
+
     def __init__(self, unit_id, spiketimes, rating, session):
         super(PatternUnit, self).__init__(unit_id, spiketimes, rating, session)
 
         # TODO: make some good plotting functions.
 
-    def plot_spots(self, pre_ms, post_ms, binsize_ms, axis=None, label='', color=None,
+    def plot_spots(self, pre_ms, post_ms, binsize_ms, sequences=None, axis=None, label='', color=None,
                    alpha=.8, linewidth=2, linestyle='-', convolve='gaussian'):
         """
         Plots all the psths for all spots.
@@ -27,7 +30,8 @@ class PatternUnit(Unit):
         :param alpha: transparency of psth line (float: 1. is opaque, 0. is transparent)
         :param linewidth: line width for psth plot (float)
         :param linestyle: matplotlib linespec for psth plot
-        :param convolve: default is false. If "gaussan" or "boxcar", use these shaped kernels to make plot instead of histogram.
+        :param convolve: default is false. If "gaussian" or "boxcar", convolve spikes w/ kernels with these
+        shapes to make plot instead of histogram.
         :return:
         """
         offset_x = (pre_ms + post_ms) * 1.05
@@ -35,7 +39,13 @@ class PatternUnit(Unit):
         xs = []
         ys = []
 
-        for seq, times in self.session.sequence_dict.items():
+        if axis is None:
+            axis = plt.axes()  #type: Axes
+
+        if not sequences:
+            sequences = self.session.sequence_dict.keys()
+        for seq in sequences:
+            times = self.session.sequence_dict[seq]
             if len(seq) == 1 and len(seq.frames) == 1:
                 spot = seq.frames[0].spots[0]
                 p_x = spot.x
@@ -52,10 +62,12 @@ class PatternUnit(Unit):
                 axis.plot([o_x]*2, [o_y, o_y+100], color='k', linewidth=.75)
         ys = np.asarray(ys)
         xs = np.asarray(xs)
-        axis.plot(xs.T, ys.T, color=color, alpha=alpha, linewidth=2)
+        axis.plot(xs.T, ys.T, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
 
 
 class PatternSession(Session):
+    """Session with Polygon pattern stimuli."""
+
     unit_type = PatternUnit
 
     def __init__(self, *args, **kwargs):
@@ -63,6 +75,8 @@ class PatternSession(Session):
         self.unique_frames = []
         self.unique_spots = set()
         self.sequences = []
+        self._intensities = set()
+        self._coordinates = set()
         super(PatternSession, self).__init__(*args, **kwargs)
         with tb.open_file(self.paths['meta'], 'r') as f:
             self.inhales, self.exhales = meta_loaders.load_sniff_events(f)
@@ -86,7 +100,7 @@ class PatternSession(Session):
             if spots_str:
                 laser_spots = meta_loaders.poly_spot_to_list(spots_str)
                 spot_sizes = meta_loaders.poly_spot_to_list(spot_size_str)
-                spot_intensity = float(tr["LaserIntensity_1"].decode().split(' ')[0])
+                spot_intensity = tr[INTENSITY_FIELD_NAME]  # type: float
                 nd = allstarts[i + 1]
                 pulse_idxes = np.where((pulse_starts >= st) & (pulse_starts < nd))[0]
                 numpulses = len(pulse_idxes)
@@ -133,10 +147,53 @@ class PatternSession(Session):
                     ))
         self.sequence_dict = sequence_dict
 
+    @property
+    def unique_intensities(self):
+        if not self._intensities:
+            for s in self.unique_spots:  # type: Spot
+                self._intensities.add(s.intensity)
+        return self._intensities
+
+    @property
+    def unique_coordinates(self):
+        if not self._coordinates:
+            for s in self.unique_spots:  # type: Spot
+                self._coordinates.add((s.x, s.y))
+        return self._coordinates
+
+    def filter_spots(self, coordinate=None, intensity=None):
+        """
+        Finds frame sequences where the coordinate and intensities specified are matched
+        If parameters are not specified, the filter is not applied for that feature.
+        :param coordinate: optional coordinate to match 
+        :param intensity: 
+        :return: 
+        """
+        coordinate_set = set()
+        intensity_set = set()
+        sequences = self.sequence_dict.keys()
+
+        if coordinate is None:
+            for f in sequences:
+                coordinate_set.add(f)
+        else:
+            for f in sequences:  #type: FrameSequence
+                if f.coordinates[0][0] == coordinate:
+                    coordinate_set.add(f)
+
+        if intensity is None:
+            for f in sequences:
+                intensity_set.add(f)
+        else:
+            for f in sequences:  # type: FrameSequence
+                if f.intensities[0][0] == intensity:
+                    intensity_set.add(f)
+        return intensity_set & coordinate_set
+
 
 class FrameSequence:
     """
-    This is essentially a statically typed object, might want to consider moving to cython.
+    Sequence of Frames. Attributes: frames, frametimes, frametimes_relative.
     """
     def __init__(self, frames: tuple, frametimes: tuple, frametimes_relative=None):
         """
@@ -145,7 +202,8 @@ class FrameSequence:
         :param frames: tuple of Frame models.
         :param frametimes: recording time where each frame is presented.
         :param frametimes_relative: This should be the timing of the frames relative to
-        inhalation onset. This is used to determine whether the sequence is
+        inhalation onset. This is used to determine whether the sequence is unique or an instance of an
+        existing frame.
         """
         #TODO: need to allow for input of relative (or sniff relative) times, probably from Voyeur data.
         if not len(frames) == len(frametimes):
@@ -154,11 +212,19 @@ class FrameSequence:
             raise ValueError('must use tuples (hashablility)')
         assert all([type(x) == Frame for x in frames])
         # assert all([type(x) == int for x in frametimes])
-        self.frames = frames
+        self.frames = frames  # type: list[Frame]
         self.frametimes = frametimes
         self.nframes = len(frames)
         self.frametimes_relative = frametimes_relative  # this is for
         self.start = frametimes[0]
+
+    @property
+    def intensities(self):
+        return [x.intensities for x in self.frames]
+
+    @property
+    def coordinates(self):
+        return [x.coordinates for x in self.frames]
 
     def __hash__(self):
         # we're using the relative frametimes here because this is
@@ -179,6 +245,9 @@ class FrameSequence:
     def __iter__(self):
         return self.frames.__iter__()
 
+    def __str__(self):
+        return "FrameSequence"
+
 
 class Frame:
     """
@@ -195,11 +264,18 @@ class Frame:
         (tuples is required because they are hashable and immutable)
 
         :param spots: tuple of spot coordinate tuples.
-        :param spotsize: size of spots (in DMD pixels)
         """
         assert type(spots) == tuple
-        self.spots = spots
+        self.spots = spots  # type: list[Spot]
         # todo store matrix dimensions for use making compact representation.
+
+    @property
+    def intensities(self):
+        return [x.intensity for x in self.spots]
+
+    @property
+    def coordinates(self):
+        return [(x.x, x.y) for x in self.spots]
 
     def __hash__(self):
         return hash(self.spots)
@@ -237,7 +313,10 @@ class Spot:
         self.intensity = intensity
 
     def __hash__(self):
-        return hash((self.x, self.y, self.size))
+        return hash((self.x, self.y, self.size, self.intensity))
+
+    def __str__(self):
+        return "(x{}y{}s{}i{})".format(self.x, self.y, self.size, self.intensity)
 
     def __eq__(self, other):
         return self.x == other.x and self.y == other.y and self.size == other.size and \
