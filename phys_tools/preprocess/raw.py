@@ -166,7 +166,7 @@ def process_spikegl_recording(raw_fn_list: list,
             else:
                 print('No PL trigger channel specified, skipping removal step.')
 
-            logging.info('Writing to {}...'.format(temp_dat_fn))
+            logging.info('Merging neural channels to dat: {}...'.format(temp_dat_fn))
             with open(temp_dat_fn, 'ab') as f:
                 _merge_channels(separated_prefix, chs, f, dtype=file_dtype)
                 logging.info('Write complete.')
@@ -175,8 +175,8 @@ def process_spikegl_recording(raw_fn_list: list,
                 create_lfp_file = True
             else:
                 create_lfp_file = False
-            _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file, dtype=file_dtype,
-                      expectedrows=samps_per_ch)
+            _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
+                      dtype=file_dtype, expectedrows=samps_per_ch)
 
         make_meta(separated_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
                   file_dtype, debug_plots)
@@ -367,7 +367,7 @@ def process_oEphys_rec(raw_folders,
             for ch, raw_fn in zip(tqdm(raw_adc_chs, unit='chan', desc='Unpack ADC chans.'), raw_adc_fns):
                 save_fn = _gen_channel_fn(adc_prefix, ch)
                 logging.debug('saving ADC ch {} ({}) to "{}"'.format(ch, raw_fn, save_fn))
-                loaded = load_continuous(raw_fn, dtype=file_dtype)
+                loaded = loadContinuous(raw_fn, dtype=file_dtype)
                 a = loaded['data']
                 with open(save_fn, 'wb') as f:
                     a.tofile(f)
@@ -389,7 +389,7 @@ def process_oEphys_rec(raw_folders,
     try:
         make_meta(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
                   file_dtype, debug_plots)
-        logging.info('meta completed.')
+        logging.info('Meta file completed.')
         os.rename(temp_meta_fn, meta_fn)
         completed = True
     except Exception as e:
@@ -537,7 +537,7 @@ def _gen_channel_fn(prefix, channel_number):
     return '{0}_ch{1:04n}.bin'.format(prefix, channel_number)
 
 
-def _merge_channels(separate_prefix, channels, save_file_obj, samples_per_read=10 ** 9,
+def _merge_channels(separate_prefix, channels, save_file_obj, samples_per_read=10 ** 8,
                     dtype=np.int16):
     """
 
@@ -559,21 +559,17 @@ def _merge_channels(separate_prefix, channels, save_file_obj, samples_per_read=1
     n_bytes = sizes[0]
     temp_array = np.zeros((stepsize_samps, len(channels)), dtype=dtype)
     seek = 0
-
     n_steps = int(np.ceil(n_bytes / stepsize_bytes))
-    step_counter = 1
 
-    while seek < n_bytes:  # must do this in blocks because we don't want to utils all data from all channels.
-        logging.info('merging block {} of {}'.format(step_counter, n_steps))
-        step_counter += 1
-        for i, fn in enumerate(fns):
-            with open(fn, 'rb') as f:
-                f.seek(seek)
-                a = np.fromfile(f, dtype, stepsize_samps)
-                temp_array[:len(a), i] = a
-
-        temp_array[:len(a), :].tofile(save_file_obj)
-        seek += stepsize_bytes
+    for _ in tqdm(range(n_steps), unit='block', desc='Merge to DAT'):
+        if seek < n_bytes:
+            for i, fn in enumerate(fns):
+                with open(fn, 'rb') as f:
+                    f.seek(seek)
+                    a = np.fromfile(f, dtype, stepsize_samps)
+                    temp_array[:len(a), i] = a
+            temp_array[:len(a), :].tofile(save_file_obj)
+            seek += stepsize_bytes
     return
 
 
@@ -707,7 +703,7 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
                 run.copy_node('/', f.root.Voyeur, v_name, recursive=True)
 
         for name, ch in stream_channels.items():
-            logging.debug('writing stream {}'.format(name))
+            logging.info('Writing stream {}'.format(name))
             stream_chunks = []
             for prefix in raw_files_prefixes:
                 fn = _gen_channel_fn(prefix, ch)
@@ -721,7 +717,7 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
             f.create_carray('/Streams', name, createparents=True, obj=stream)
         f.create_group('/', 'Events')
         for name, ch in event_channels.items():
-
+            logging.info('Making events for {}.'.format(name))
             stream_chunks = []
             for prefix in raw_files_prefixes:
                 fn = _gen_channel_fn(prefix, ch)
