@@ -17,7 +17,7 @@ class PatternUnit(Unit):
         # TODO: make some good plotting functions.
 
     def plot_spots(self, pre_ms, post_ms, binsize_ms, sequences=None, axis=None, label='', color=None,
-                   alpha=.8, linewidth=2, linestyle='-', convolve='gaussian'):
+                   alpha=.8, linewidth=2, linestyle='-', convolve='gaussian') -> plt.Axes:
         """
         Plots all the psths for all spots.
 
@@ -32,7 +32,7 @@ class PatternUnit(Unit):
         :param linestyle: matplotlib linespec for psth plot
         :param convolve: default is false. If "gaussian" or "boxcar", convolve spikes w/ kernels with these
         shapes to make plot instead of histogram.
-        :return:
+        :return: axis
         """
         offset_x = (pre_ms + post_ms) * 1.05
         offset_y = 200.
@@ -63,6 +63,7 @@ class PatternUnit(Unit):
         ys = np.asarray(ys)
         xs = np.asarray(xs)
         axis.plot(xs.T, ys.T, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
+        return axis
 
 
 class PatternSession(Session):
@@ -100,7 +101,10 @@ class PatternSession(Session):
             if spots_str:
                 laser_spots = meta_loaders.poly_spot_to_list(spots_str)
                 spot_sizes = meta_loaders.poly_spot_to_list(spot_size_str)
-                spot_intensity = tr[INTENSITY_FIELD_NAME]  # type: float
+                try:
+                    spot_intensity = tr[INTENSITY_FIELD_NAME]  # type: float
+                except ValueError:  # very first recordings don't have this field, and were recorded with this power.
+                    spot_intensity = 187.
                 nd = allstarts[i + 1]
                 pulse_idxes = np.where((pulse_starts >= st) & (pulse_starts < nd))[0]
                 numpulses = len(pulse_idxes)

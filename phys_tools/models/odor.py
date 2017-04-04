@@ -262,9 +262,9 @@ class OdorSession(Session):
         return result
 
     @property
-    def odors(self) -> np.array:
+    def unique_odors(self) -> np.array:
         """
-        Returns all odors found within the session.
+        Returns all unique_odors found within the session.
         """
         if self._odors is None:
             self._odors = np.unique(self.stimuli['odors'])
@@ -274,18 +274,41 @@ class OdorSession(Session):
         """
         Returns a sorted array of unique concentrations presented for a specified odorant.
         """
-        odors = self.stimuli['odors']
-        odormask = odors == odor
-        concs = self.stimuli['odorconcs']
-        return np.unique(concs[odormask])
+
+        return self.concentrations_by_odor[odor]
 
     @property
     def concentrations_by_odor(self) -> dict:
         if self._concentrations_by_odor is None:
             self._concentrations_by_odor = {}
-            for o in self.odors:
+            for o in self.unique_odors:
                 self._concentrations_by_odor[o] = self.get_concentrations(o)
         return self._concentrations_by_odor
+
+    def get_first_odor_sniffs(self, odor: str, concentration):
+        """
+        returns the first inhalations and exhalations of specified odorant.
+
+        :param odor: string specifying odor
+        :param concentration: numeric specifying concentration of odor.
+        :return: tuple (inhalations, exhalations) of arrays.
+        """
+
+        odors = self.stimuli['odors']
+        concs = self.stimuli['odorconcs']
+        inhales = self.stimuli['inhales']
+        exhales = self.stimuli['exhales']
+        odormask = odors == odor
+        concmask = concs == concentration
+        allmask = odormask & concmask
+        idxes = np.where(allmask)[0]
+        first_inhs, first_exhs = [], []
+        for i in idxes:
+            inhs, exhs = inhales[i], exhales[i]
+            if len(inhs) and len(exhs):
+                first_inhs.append(inhs[0])
+                first_exhs.append(exhs[0])
+        return np.array(first_inhs), np.array(first_exhs)
 
     def plot_odor_sniffs(self, odor: str, conc, pre_ms, post_ms, axis=None, separate_plots=False, color='b', alpha=1.,
                          linewidth=2, linestyle='-', ):

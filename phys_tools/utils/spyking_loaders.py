@@ -156,7 +156,7 @@ def load_probe_positions(probe_fn) -> np.array:
     :return: array of positions by channel.
     """
 
-    probe = _read_probe(probe_fn)
+    probe = read_probe(probe_fn)
     channel_groups = probe['channel_groups']
 
     # Make a set of all the active channels and a dictionary of the channels and their positions.
@@ -184,7 +184,7 @@ def load_probe_positions(probe_fn) -> np.array:
     return pos_array
 
 
-def _read_probe(prb_fn) -> dict:
+def read_probe(prb_fn) -> dict:
     """
     Returns dictionary of probe definition.
 

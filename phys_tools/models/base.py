@@ -563,31 +563,6 @@ class Session(ABC):
         else:
             raise ValueError('sorry, samples_to_millis cannot use this datatype.')
 
-    def get_first_odor_sniffs(self, odor: str, concentration):
-        """
-        returns the first inhalations and exhalations of specified odorant.
-
-        :param odor: string specifying odor
-        :param concentration: numeric specifying concentration of odor.
-        :return: tuple (inhalations, exhalations) of arrays.
-        """
-
-        odors = self.stimuli['odors']
-        concs = self.stimuli['odorconcs']
-        inhales = self.stimuli['inhales']
-        exhales = self.stimuli['exhales']
-        odormask = odors == odor
-        concmask = concs == concentration
-        allmask = odormask & concmask
-        idxes = np.where(allmask)[0]
-        first_inhs, first_exhs = [], []
-        for i in idxes:
-            inhs, exhs = inhales[i], exhales[i]
-            if len(inhs) and len(exhs):
-                first_inhs.append(inhs[0])
-                first_exhs.append(exhs[0])
-        return np.array(first_inhs), np.array(first_exhs)
-
     @property
     def sniff(self) -> np.array:
         """

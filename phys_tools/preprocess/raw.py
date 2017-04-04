@@ -12,6 +12,7 @@ from glob import glob
 from .open_ephys_helpers import loadContinuous
 from tqdm import tqdm
 import pickle
+import warnings
 try:
     import matplotlib.pyplot as plt
 except RuntimeError:
@@ -29,6 +30,8 @@ LOGGER.addHandler(console_handler)
 EXPECTED_LFP_ROWS = 1800000  # number lfp samples per channel for openphys LFP file (30 min @ 1kHz)
 STREAM_PLOT_NSAMP = 100000
 EVENT_PLOT_NSAMP = 1000000
+
+
 
 def process_spikegl_recording(raw_fn_list: list,
                               meta_fn_list: list,
@@ -212,7 +215,9 @@ def process_oEphys_rec(raw_folders,
                        raw_prefixes=['100'],
                        debug_plots=True,
                        file_dtype='int16',
-                       clean_on_exemption=True):
+                       clean_on_exemption=True,
+                       process_aux=True,
+                       process_neural=True):
     """
 
     :param raw_folders: folder where raw files exist in open ephys format
@@ -275,6 +280,7 @@ def process_oEphys_rec(raw_folders,
 
     try:
         os.mkdir(tmpdirname)
+
         with open(temp_dat_fn, 'wb') as f:
             pass
 
@@ -292,88 +298,93 @@ def process_oEphys_rec(raw_folders,
             raw_neural_chs = [_get_number(p, 'CH') for p in raw_neural_fns]
             raw_aux_chs = [_get_number(p, 'AUX') for p in raw_aux_fns]  # not used currently.
             raw_adc_chs = [_get_number(p, 'ADC') for p in raw_adc_fns]
-            for ch in neural_channel_numbers:
-                if ch not in raw_neural_chs:
-                    raise ValueError('Neural channel {} is not found).'.format(ch))
-            for m_chs in (meta_event_dict, meta_stream_dict):
-                for k, v in m_chs.items():
-                    if v not in raw_adc_chs:
-                        raise ValueError('Channel {} specified as a meta channel "{}", but not found '
-                                         'in recording.'.format(v, k))
+            if process_neural:
+                for ch in neural_channel_numbers:
+                    if ch not in raw_neural_chs:
+                        raise ValueError('Neural channel {} is not found).'.format(ch))
+                for m_chs in (meta_event_dict, meta_stream_dict):
+                    for k, v in m_chs.items():
+                        if v not in raw_adc_chs:
+                            raise ValueError('Channel {} specified as a meta channel "{}", but not found '
+                                             'in recording.'.format(v, k))
 
-            if pl_trig_ch and pl_trig_ch in raw_adc_chs:
-                logging.info('Running PL removal using AUX ch {}...'.format(pl_trig_ch))
-                plid = raw_adc_chs.index(pl_trig_ch)
-                plfn = raw_adc_fns[plid]
-                pl_sig = loadContinuous(plfn, dtype=file_dtype)['data']
-                if debug_plots and i_run < 1:
-                    plt.plot(pl_sig[:10000])
-                    plt.title('PL trig debug plot')
-                    plt.show()
-                pl_trig_times = _find_pl_times(pl_sig)
-
-                logging.debug('{} pl trig times found'.format(len(pl_trig_times)))
-            else:  # we still have to make the files, unlike in the SGL case where they're already created.
-                if pl_trig_ch:
-                    logging.warning('PL trig channel specified as AUX {}, '
-                                    'but this file not found.'.format(pl_trig_ch))
-                logging.info('No PL trig removal. Writing temporary dat files...')
-            for i_ch in tqdm(neural_channel_numbers, unit='chan', desc='Unpack/PL filter'):
-                save_fn = _gen_channel_fn(separated_prefix, i_ch)
-                raw_fn = raw_neural_fns[raw_neural_chs.index(i_ch)]
-                loaded = loadContinuous(raw_fn, dtype=file_dtype)
-                a = loaded['data']
-                n_samples_by_ch.append(len(a))
-                if not fs:
-                    # TODO keep track of number of samples in recording
-                    fs = int(loaded['header']['sampleRate'])
                 if pl_trig_ch and pl_trig_ch in raw_adc_chs:
-                    _rm_pl_i(a, pl_trig_times)
-                with open(save_fn, 'wb') as f:
-                    a.tofile(f)
+                    logging.info('Running PL removal using AUX ch {}...'.format(pl_trig_ch))
+                    plid = raw_adc_chs.index(pl_trig_ch)
+                    plfn = raw_adc_fns[plid]
+                    pl_sig = loadContinuous(plfn, dtype=file_dtype)['data']
+                    if debug_plots and i_run < 1:
+                        plt.plot(pl_sig[:10000])
+                        plt.title('PL trig debug plot')
+                        plt.show()
+                    pl_trig_times = _find_pl_times(pl_sig)
 
-            #note: dat file will only have neural channels. Aux channels will not be added to the dat
-            total_neural_samples = 0  # sum of samples in all neural channels
-            for i_ch in range(len(n_samples_by_ch)):
-                total_neural_samples += n_samples_by_ch[i_ch]
-                # check if all channels have the same number of samples.
-                # could probably be done with filesize...
-                if n_samples_by_ch[i_ch] != n_samples_by_ch[0]:
-                    raise ValueError('channel {} does not have the same number of channels '
-                                     'as channel {}.'.format(neural_channel_numbers[i_ch],
-                                                            neural_channel_numbers[0]))
-            total_neural_bytes = bytes_per_sample * total_neural_samples
-            total_expected_dat_size += total_neural_bytes
+                    logging.debug('{} pl trig times found'.format(len(pl_trig_times)))
+                else:  # we still have to make the files, unlike in the SGL case where they're already created.
+                    if pl_trig_ch:
+                        logging.warning('PL trig channel specified as AUX {}, '
+                                        'but this file not found.'.format(pl_trig_ch))
+                    logging.info('No PL trig removal. Writing temporary dat files...')
+                for i_ch in tqdm(neural_channel_numbers, unit='chan', desc='Unpack/PL filter'):
+                    save_fn = _gen_channel_fn(separated_prefix, i_ch)
+                    raw_fn = raw_neural_fns[raw_neural_chs.index(i_ch)]
+                    loaded = loadContinuous(raw_fn, dtype=file_dtype)
+                    a = loaded['data']
+                    n_samples_by_ch.append(len(a))
+                    if not fs:
+                        # TODO keep track of number of samples in recording
+                        fs = int(loaded['header']['sampleRate'])
+                    if pl_trig_ch and pl_trig_ch in raw_adc_chs:
+                        _rm_pl_i(a, pl_trig_times)
+                    with open(save_fn, 'wb') as f:
+                        a.tofile(f)
 
-            logging.info('Neural channels extracted at {} hz'.format(fs))
-            logging.info('Writing to {}...'.format(temp_dat_fn))
-            with open(temp_dat_fn, 'ab') as f:
-                _merge_channels(separated_prefix, neural_channel_numbers, f, dtype=file_dtype)
-                logging.info('Complete.')
+                #note: dat file will only have neural channels. Aux channels will not be added to the dat
+                total_neural_samples = 0  # sum of samples in all neural channels
+                for i_ch in range(len(n_samples_by_ch)):
+                    total_neural_samples += n_samples_by_ch[i_ch]
+                    # check if all channels have the same number of samples.
+                    # could probably be done with filesize...
+                    if n_samples_by_ch[i_ch] != n_samples_by_ch[0]:
+                        raise ValueError('channel {} does not have the same number of channels '
+                                         'as channel {}.'.format(neural_channel_numbers[i_ch],
+                                                                neural_channel_numbers[0]))
+                total_neural_bytes = bytes_per_sample * total_neural_samples
+                total_expected_dat_size += total_neural_bytes
 
-            assert os.path.getsize(temp_dat_fn) == total_expected_dat_size
+                logging.info('Neural channels extracted at {} hz'.format(fs))
+                logging.info('Writing to {}...'.format(temp_dat_fn))
+                with open(temp_dat_fn, 'ab') as f:
+                    _merge_channels(separated_prefix, neural_channel_numbers, f, dtype=file_dtype)
+                    logging.info('Complete.')
 
-            if i_run < 1:
-                create_lfp_file = True
-            else:
-                create_lfp_file = False
-            _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
-                      dtype=file_dtype, expectedrows=EXPECTED_LFP_ROWS)
-            # expected rows is hard-coded for a 30 minute recording @ 1kHz
+                assert os.path.getsize(temp_dat_fn) == total_expected_dat_size
 
-            # todo: handle aux channels too and implement a way to get aux channels into the meta file.
-            logging.info('reading ADC channels')
+                if i_run < 1:
+                    create_lfp_file = True
+                else:
+                    create_lfp_file = False
+                _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
+                          dtype=file_dtype, expectedrows=EXPECTED_LFP_ROWS)
+                # expected rows is hard-coded for a 30 minute recording @ 1kHz
+            if process_aux:
+                # todo: handle aux channels too and implement a way to get aux channels into the meta file.
+                logging.info('reading ADC channels')
 
-            for ch, raw_fn in zip(tqdm(raw_adc_chs, unit='chan', desc='Unpack ADC chans.'), raw_adc_fns):
-                save_fn = _gen_channel_fn(adc_prefix, ch)
-                logging.debug('saving ADC ch {} ({}) to "{}"'.format(ch, raw_fn, save_fn))
-                loaded = loadContinuous(raw_fn, dtype=file_dtype)
-                a = loaded['data']
-                with open(save_fn, 'wb') as f:
-                    a.tofile(f)
-        logging.info('Renaming temp dat and lfp files...')
-        os.rename(temp_dat_fn, dat_fn)
-        os.rename(temp_lfp_fn, lfp_fn)
+                for ch, raw_fn in zip(tqdm(raw_adc_chs, unit='chan', desc='Unpack ADC chans.'), raw_adc_fns):
+                    save_fn = _gen_channel_fn(adc_prefix, ch)
+                    logging.debug('saving ADC ch {} ({}) to "{}"'.format(ch, raw_fn, save_fn))
+                    loaded = loadContinuous(raw_fn, dtype=file_dtype)
+                    a = loaded['data']
+                    with open(save_fn, 'wb') as f:
+                        a.tofile(f)
+                    if not fs:
+                        fs = int(loaded['header']['sampleRate'])
+        if process_neural:
+            logging.info('Renaming temp dat and lfp files...')
+
+            os.rename(temp_dat_fn, dat_fn)
+            os.rename(temp_lfp_fn, lfp_fn)
 
     except Exception as e:
         logging.error('Failed during neural data handling. No resume is possible.')
@@ -387,10 +398,11 @@ def process_oEphys_rec(raw_folders,
         log_file_handler.close()
 
     try:
-        make_meta(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
-                  file_dtype, debug_plots)
-        logging.info('Meta file completed.')
-        os.rename(temp_meta_fn, meta_fn)
+        if process_aux:
+            make_meta(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
+                      file_dtype, debug_plots)
+            logging.info('Meta file completed.')
+            os.rename(temp_meta_fn, meta_fn)
         completed = True
     except Exception as e:
         logging.error('Failed during metadata creation step.')
@@ -700,7 +712,9 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
             v_name, _ = os.path.splitext(filename)
             with tb.open_file(fn, 'r') as run:
                 logging.debug("{}".format(fn))
-                run.copy_node('/', f.root.Voyeur, v_name, recursive=True)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=tb.NaturalNameWarning)
+                    run.copy_node('/', f.root.Voyeur, v_name, recursive=True)
 
         for name, ch in stream_channels.items():
             logging.info('Writing stream {}'.format(name))
