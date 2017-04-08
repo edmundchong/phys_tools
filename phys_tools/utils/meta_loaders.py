@@ -1,5 +1,6 @@
 import tables as tb
 import numpy as np
+import datetime
 
 # these are strings that are used to define fieldnames.
 # If these change for different filetypes, you can change them here easily.
@@ -71,13 +72,33 @@ def _load_voyeur_trials_by_run(meta_file: tb.File) -> list:
     :return: list of all trials
     """
     f = meta_file
-    behavior_node_names = sorted(list(f.root.Voyeur._v_children.keys()))
+    behavior_node_names = list(f.root.Voyeur._v_children.keys())
+    behavior_node_dtg = [_get_date_from_voyeur_name(x) for x in behavior_node_names]
+    _, behavior_node_names = zip(*sorted(zip(behavior_node_dtg, behavior_node_names)))
     all_trials = []
+
     for name in behavior_node_names:
+        print(name)
         n = f.get_node('/Voyeur/{}'.format(name))
         run_trials = n.Trials.read()
         all_trials.append(run_trials)
     return all_trials
+
+
+def _get_date_from_voyeur_name(nodename):
+    """
+    Parses node names with the following format:
+        "***MOUSEDATA***Dyyyy_mm_ddThh_mm_ss"
+    
+    :param nodename: 
+    :return: 
+    """
+
+    _, dt = nodename.split('D')
+    d_str, t_str = dt.split('T')
+    y, m, d = [int(x) for x in d_str.split('_')]
+    h, mn, s = [int(x) for x in t_str.split('_')]
+    return datetime.datetime(y, m, d, h, mn, s)
 
 
 def _load_ephys_trialstarts_by_run(meta_file: tb.File) -> list():
