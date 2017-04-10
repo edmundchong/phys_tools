@@ -25,12 +25,13 @@ console_handler = logging.StreamHandler()
 console_handler.setFormatter(LOG_FORMATTER)
 LOGGER.addHandler(console_handler)
 
-
-
 EXPECTED_LFP_ROWS = 1800000  # number lfp samples per channel for openphys LFP file (30 min @ 1kHz)
 STREAM_PLOT_NSAMP = 100000
 EVENT_PLOT_NSAMP = 1000000
 
+# The filter below is used to compress stream data in the meta.h5 file. It is chosen for maximum compatibility.
+STREAM_FILTER = tb.Filters(complevel=6, complib='zlib', shuffle=True)
+LFP_FILTER = tb.Filters(complevel=6, complib='zlib', shuffle=True)
 
 
 def process_spikegl_recording(raw_fn_list: list,
@@ -205,7 +206,7 @@ def process_spikegl_recording(raw_fn_list: list,
     return
 
 
-def process_oEphys_rec(raw_folders,
+def process_oEphys_rec(open_ephys_recording_folder,
                        save_prefix,
                        neural_channel_numbers: (list, range),
                        meta_stream_dict: dict,
@@ -217,15 +218,26 @@ def process_oEphys_rec(raw_folders,
                        file_dtype='int16',
                        clean_on_exemption=True,
                        process_aux=True,
-                       process_neural=True):
+                       process_neural=True
+                       ):
     """
+    Preprocessing script for electrophysiology data.
+    
+    Outputs to a dat file of neural data, a meta.h5 file, and an lfp.h5 file.
+    
+    The meta file composition is defined by meta_stream_dict and meta_event_dict parameters. Streams are
+    stored directly to the hdf5 file, while events are processed by event processors specified in the meta_handlers
+    package.
+    
+    
+    
 
-    :param raw_folders: folder where raw files exist in open ephys format
+    :param open_ephys_recording_folder: folder where raw files exist in open ephys format (ie ../2017-03-20_11-59-00)
     :param raw_prefixes: prefix of files
-    :param save_prefix:
+    :param save_prefix: Prefix in which to save the file.
     :param neural_channel_numbers: openephys channels start at 1.
-    :param meta_stream_dict:
-    :param meta_event_dict:
+    :param meta_stream_dict: dictionary specifying streams: {name_string: channelnumber, ..}
+    :param meta_event_dict: dictionary specifying streams: {name_string: channelnumber, ..}
     :param voyeur_paths:
     :param pl_trig_ch:
     :param debug_plots:
@@ -240,21 +252,21 @@ def process_oEphys_rec(raw_folders,
     log_file_handler.setFormatter(LOG_FORMATTER)
     LOGGER.addHandler(log_file_handler)
 
-    if type(raw_folders) == str:
-        raw_folders = (raw_folders,)
+    if type(open_ephys_recording_folder) == str:
+        open_ephys_recording_folder = (open_ephys_recording_folder,)
     else:
-        raw_folders = raw_folders
+        open_ephys_recording_folder = open_ephys_recording_folder
 
     if type(voyeur_paths) == str:
         voyeur_fns = (voyeur_paths,)
     else:
         voyeur_fns = voyeur_paths
 
-    if len(voyeur_fns) < len(raw_folders):
+    if len(voyeur_fns) < len(open_ephys_recording_folder):
         logging.warning('{} raw files specified and only '
-                        '{} voyeur files.'.format(len(raw_folders),len(voyeur_fns)))
+                        '{} voyeur files.'.format(len(open_ephys_recording_folder), len(voyeur_fns)))
 
-    for files in (voyeur_fns, raw_folders):
+    for files in (voyeur_fns, open_ephys_recording_folder):
         for f in files:
             if not os.path.exists(f):
                 raise FileNotFoundError('{} not found.'.format(f))
@@ -280,23 +292,23 @@ def process_oEphys_rec(raw_folders,
 
     try:
         os.mkdir(tmpdirname)
+        if process_neural:
+            with open(temp_dat_fn, 'wb') as f:
+                pass
 
-        with open(temp_dat_fn, 'wb') as f:
-            pass
-
-        for i_run in range(len(raw_folders)):  # iterating through the folders and combine the runs
+        for i_run in range(len(open_ephys_recording_folder)):  # iterating through the folders and combine the runs
             fs = 0
             separated_prefix = os.path.join(tmpdirname, '{}_{}'.format(save_prefix, i_run))
             separated_prefixes.append(separated_prefix)
             adc_prefix = separated_prefix + '_ADC'  # for auxillary channels, which start from 1
             adc_prefixes.append(adc_prefix)
-            raw_folder = raw_folders[i_run]
+            raw_folder = open_ephys_recording_folder[i_run]
             raw_prefix = raw_prefixes[i_run]
             raw_neural_fns = glob(os.path.join(raw_folder, "{}_CH*.continuous".format(raw_prefix)))
             raw_aux_fns = glob(os.path.join(raw_folder, "{}_AUX*.continuous".format(raw_prefix)))
             raw_adc_fns = glob(os.path.join(raw_folder, "{}_ADC*.continuous".format(raw_prefix)))
             raw_neural_chs = [_get_number(p, 'CH') for p in raw_neural_fns]
-            raw_aux_chs = [_get_number(p, 'AUX') for p in raw_aux_fns]  # not used currently.
+            raw_aux_chs = [_get_number(p, 'AUX') for p in raw_aux_fns]  # not used currently. This would be gyroscope information.
             raw_adc_chs = [_get_number(p, 'ADC') for p in raw_adc_fns]
             if process_neural:
                 for ch in neural_channel_numbers:
@@ -674,7 +686,7 @@ def _make_lfp(raw_files_prefix: str, channels, lfp_filename, acquistion_frequenc
             n._f_setattr('Frequency_hz', lfp_freq)
             for ch in channels:
                 f.create_earray('/lfp/', 'ch_{0:04n}'.format(ch), tb.Int16Atom(), shape=(0,),
-                                expectedrows=expectedrows//downsample_factor)
+                                expectedrows=expectedrows//downsample_factor, filters=LFP_FILTER)
     logging.info("writing LFP to {}".format(lfp_filename))
     with tb.open_file(lfp_filename, 'r+') as f:
         for ch in tqdm(channels, unit='chan', desc='LFP save'):
@@ -728,7 +740,7 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
                 plt.plot(stream[:STREAM_PLOT_NSAMP])
                 plt.title(name)
                 plt.show()
-            f.create_carray('/Streams', name, createparents=True, obj=stream)
+            f.create_carray('/Streams', name, createparents=True, obj=stream, filters=STREAM_FILTER)
         f.create_group('/', 'Events')
         for name, ch in event_channels.items():
             logging.info('Making events for {}.'.format(name))
