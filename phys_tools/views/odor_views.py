@@ -85,7 +85,7 @@ class StimuliViewer(QWidget):
                     c_str = '{:0.1e}'.format(c)
                     new_odor_set.add((o, c_str))
                     new_odor_concs[(o, c_str)] = c
-        # add odors to the odor list view that are not there yet.
+        # add unique_odors to the odor list view that are not there yet.
         to_add = new_odor_set.difference(self.current_odor_set)
         for o, c_str in to_add:
             if o not in self.concs_by_odor_dict.keys():

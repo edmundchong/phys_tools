@@ -81,6 +81,6 @@ class SpotMapViewWidget(PsthViewWidget):
         mthd = self.method_box.currentText()
         pre, pst, bs = self.pre_pad_box.value(), self.post_pad_box.value(), self.binsize_box.value()
         for i, u in enumerate(units):
-            u.plot_spots(pre, pst, bs, self.plot.axis,
+            u.plot_spots(pre, pst, bs, axis=self.plot.axis,
                          color=COLORS[i % len(COLORS)], convolve=mthd)
         self.plot.draw()
