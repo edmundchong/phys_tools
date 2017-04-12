@@ -78,7 +78,6 @@ def _load_voyeur_trials_by_run(meta_file: tb.File) -> list:
     all_trials = []
 
     for name in behavior_node_names:
-        print(name)
         n = f.get_node('/Voyeur/{}'.format(name))
         run_trials = n.Trials.read()
         all_trials.append(run_trials)

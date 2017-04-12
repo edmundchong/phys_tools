@@ -25,17 +25,26 @@ class Unit(ABC):
         self.unit_id = unit_id
         self.rating = rating
         self._template = None  # to be loaded on demand by load_template().
-        self.fr = self._calc_fr(spiketimes)
+        self._fr = None
 
-    def _calc_fr(self, spiketimes: np.array) -> float:
+    @property
+    def fr(self):
         """
-        Calculates the firing rate (in Hz) for the unit.
-        :return: float firing rate in spikes sec-1
+        Firing rate in hz. Calculated from  (N_spikes / Record_length) if known, otherwise calculated using 
+        mean ISI.
         """
-        fr_s = np.median(np.diff(spiketimes))
-        fr_hz = self.session.fs / fr_s
-        return fr_hz
 
+        if self._fr is None:
+            if self.session.recording_length is None:
+                isi_samples = np.mean(np.diff(self.spiketimes))
+                if isi_samples > 0.:
+                    self._fr = self.session.fs / isi_samples
+                else:
+                    self._fr = 0.  # should only happen when there are no spikes.
+            else:
+                recording_len_seconds = self.session.samples_to_millis(self.session.recording_length) / 1000.
+                self._fr = len(self.spiketimes) / recording_len_seconds
+        return self._fr
 
     def get_epoch_samples(self, start: int, end: int) -> np.array:
         """
@@ -415,12 +424,17 @@ class Session(ABC):
             'probe': fn_probe
         }
         self._unit_subset = None
-        with tb.open_file(fn_meta, 'r') as f:
+        with tb.open_file(fn_meta, 'r') as f:  # type: tb.File
             try:
                 self.fs = f.get_node_attr('/', 'acquisition_frequency_hz')
-            except:
+            except AttributeError:
                 print('warning, no fs supplied in meta file. Using default of 25khz')
                 self.fs = 25000.
+            try:
+                run_ends = f.get_node('/Events/run_ends').read()
+                self.recording_length = run_ends.max()
+            except tb.NoSuchNodeError:
+                self.recording_length = None
             self.stimuli = self._make_stimuli(f)
         sk_units = spyking_loaders.load_spiketimes_unstructured(fn_templates, fn_results)
         self._make_units(sk_units)

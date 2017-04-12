@@ -175,7 +175,7 @@ class MainWidgetEphys(QWidget):
                     for u in s.units():
                         self.unit_models[str(u)] = u
                 except Exception as e:
-                    print("File cannot be opened: {}.".format(f, e))
+                    print("File cannot be opened: {}.\n {}".format(f, e.msg))
                     errors += 1
         if errors:
             self.parent().setStatusTip(
