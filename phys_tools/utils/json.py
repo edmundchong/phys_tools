@@ -1,9 +1,10 @@
 import json
-from phys_tools import models
+from phys_tools.models.odor import OdorSession
+from phys_tools.models.polygon import PatternSession
 
 MODELS = {
-    "<class 'phys_tools.models.odor.OdorSession'>": models.OdorSession,
-    "<class 'phys_tools.models.odor.PatternSession'>": models.PatternSession
+    "<class 'phys_tools.models.odor.OdorSession'>": OdorSession,
+    "<class 'phys_tools.models.polygon.PatternSession'>": PatternSession
 }
 
 
@@ -23,7 +24,7 @@ def save_units_json(json_path: str, units: list):
         if session != last_s:
             sess_id = str(session)
             s_type = str(type(session))
-            assert s_type in MODELS.keys(), "Sorry this model type is not specified in the MODELS dict."
+            assert s_type in MODELS.keys(), "Sorry this model type is not specified in the MODELS dict. \n{}".format(s_type)
             json_dict[sess_id] = {
                 'filenames': session.paths,
                 'sessionModelType': s_type,

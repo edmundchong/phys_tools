@@ -4,7 +4,7 @@ from setuptools import setup
 setup(
     name='phys_tools',
     version='',
-    packages=['phys_tools', 'phys_tools.utils', 'phys_tools.preprocess', 'phys_tools.models'],
+    packages=['phys_tools', 'phys_tools.utils', 'phys_tools.preprocess', 'phys_tools.models', 'phys_tools.views'],
     url='',
     license='MIT',
     author='chris',
