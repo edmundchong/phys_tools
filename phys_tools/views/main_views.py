@@ -67,6 +67,15 @@ class MainWindow(QMainWindow):
         open_folder_action.triggered.connect(self.open_folder)
         filemenu.addAction(open_folder_action)
 
+        #full screen
+        fullscreen_Action = QAction("Toggle full screen...", self)
+        fullscreen_Action.triggered.connect(self.toggle_screen)
+        fullscreen_Action.setStatusTip("Toggle full screen.")
+        fullscreen_Action.setShortcut("Ctrl+E")
+        filemenu.addAction(fullscreen_Action)
+
+
+
         toolmenu = menu.addMenu('Subset')
         act = self.unit_sub_dock.toggleViewAction()  # type: QAction
         act.setText('Open subset list')
@@ -92,6 +101,13 @@ class MainWindow(QMainWindow):
         #TODO: enable selection of multiple
         filepaths = glob(os.path.join(folder, '**/*.dat'), recursive=True)
         self.sessions_opened.emit(filepaths)
+
+
+    def toggle_screen(self):
+        if (self.windowState() == Qt.WindowMaximized):
+            self.showNormal()
+        else:
+            self.showMaximized()
 
 
 class MainWidgetEphys(QWidget):
