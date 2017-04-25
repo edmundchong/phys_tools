@@ -281,17 +281,18 @@ def process_oEphys_rec(open_ephys_recording_folder,
     separated_prefixes = []
     adc_prefixes = []  # ADC prefixes are needed because ADC channel start at 1 - same as neural...
 
-    for fnn in (dat_fn, lfp_fn):
-        if os.path.exists(fnn):
-            logging.error('Dat already exists: {}. Exiting'.format(dat_fn))
-            return
+    if process_neural:
+        for fnn in (dat_fn, lfp_fn):
+            if os.path.exists(fnn):
+                logging.error('Dat already exists: {}. Exiting'.format(dat_fn))
+                return
 
     bytes_per_sample = file_dtype.itemsize
     n_samples_by_ch = []  # list of the number of samples read into each neural channel.
     total_expected_dat_size = 0 # running value of the expected dat size after every run is appended.
+    os.mkdir(tmpdirname)
 
     try:
-        os.mkdir(tmpdirname)
         if process_neural:
             with open(temp_dat_fn, 'wb') as f:
                 pass
@@ -309,16 +310,12 @@ def process_oEphys_rec(open_ephys_recording_folder,
             raw_adc_fns = glob(os.path.join(raw_folder, "{}_ADC*.continuous".format(raw_prefix)))
             raw_neural_chs = [_get_number(p, 'CH') for p in raw_neural_fns]
             raw_aux_chs = [_get_number(p, 'AUX') for p in raw_aux_fns]  # not used currently. This would be gyroscope information.
-            raw_adc_chs = [_get_number(p, 'ADC') for p in raw_adc_fns]
+            raw_adc_chs_present = [_get_number(p, 'ADC') for p in raw_adc_fns]
+            raw_adc_chs = []
             if process_neural:
                 for ch in neural_channel_numbers:
                     if ch not in raw_neural_chs:
                         raise ValueError('Neural channel {} is not found).'.format(ch))
-                for m_chs in (meta_event_dict, meta_stream_dict):
-                    for k, v in m_chs.items():
-                        if v not in raw_adc_chs:
-                            raise ValueError('Channel {} specified as a meta channel "{}", but not found '
-                                             'in recording.'.format(v, k))
 
                 if pl_trig_ch and pl_trig_ch in raw_adc_chs:
                     logging.info('Running PL removal using AUX ch {}...'.format(pl_trig_ch))
@@ -379,11 +376,20 @@ def process_oEphys_rec(open_ephys_recording_folder,
                 _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
                           dtype=file_dtype, expectedrows=EXPECTED_LFP_ROWS)
                 # expected rows is hard-coded for a 30 minute recording @ 1kHz
+                logging.info('Renaming temp dat and lfp files...')
+                os.rename(temp_dat_fn, dat_fn)
+                os.rename(temp_lfp_fn, lfp_fn)
             if process_aux:
+                for m_chs in (meta_event_dict, meta_stream_dict):
+                    for k, v in m_chs.items():
+                        raw_adc_chs.append(int(v))
+                        if process_aux and v not in raw_adc_chs_present:
+                            raise ValueError('Channel {} specified as a meta channel "{}", but not found '
+                                             'in recording.'.format(v, k))
                 # todo: handle aux channels too and implement a way to get aux channels into the meta file.
                 logging.info('reading ADC channels')
-
-                for ch, raw_fn in zip(tqdm(raw_adc_chs, unit='chan', desc='Unpack ADC chans.'), raw_adc_fns):
+                for ch in tqdm(raw_adc_chs, unit='chan', desc='Unpack ADC chans.'):
+                    raw_fn = raw_adc_fns[raw_adc_chs_present.index(ch)]
                     save_fn = _gen_channel_fn(adc_prefix, ch)
                     logging.debug('saving ADC ch {} ({}) to "{}"'.format(ch, raw_fn, save_fn))
                     loaded = loadContinuous(raw_fn, dtype=file_dtype)
@@ -392,11 +398,6 @@ def process_oEphys_rec(open_ephys_recording_folder,
                         a.tofile(f)
                     if not fs:
                         fs = int(loaded['header']['sampleRate'])
-        if process_neural:
-            logging.info('Renaming temp dat and lfp files...')
-
-            os.rename(temp_dat_fn, dat_fn)
-            os.rename(temp_lfp_fn, lfp_fn)
 
     except Exception as e:
         logging.error('Failed during neural data handling. No resume is possible.')
