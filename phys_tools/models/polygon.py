@@ -6,7 +6,7 @@ import numpy as np
 SPOT_FIELD_NAME = 'spots'
 SPOTSIZE_FIELD_NAME = 'spotsizes'
 INTENSITY_FIELD_NAME = 'LaserIntensity_MWmm2'  # assuming homogenous intensity for all spots.
-
+HALFTONE_FIELD_NAME = 'intensities'
 
 class PatternUnit(Unit):
     """Unit from PatternSession"""
@@ -93,37 +93,49 @@ class PatternSession(Session):
         n_trs = len(trials)
         pulse_starts = laser_events[:, 0]
         sequence_dict = {}
+        protocol_name = meta_loaders._get_voyeur_protocol_name(meta_file)
+
+        if protocol_name == 'patternstim_2AFC_ephys':
+            start_frame = 1  # these recordings have a blank start frame.
+        else:
+            start_frame = 0
 
         for i in range(n_trs - 1):
             st, tr = trials[i]
             spots_str = tr[SPOT_FIELD_NAME].decode()  # spots are stored as a list of x,y coordinates (ie [[2,3], [5,3]])
             spot_size_str = tr[SPOTSIZE_FIELD_NAME].decode()  # decode transforms bytes to str
+            spot_halftone_intensity_str = tr[HALFTONE_FIELD_NAME].decode()
+            spot_halftone_intensity = meta_loaders.poly_spot_to_list(spot_halftone_intensity_str)
             if spots_str:
                 laser_spots = meta_loaders.poly_spot_to_list(spots_str)
                 spot_sizes = meta_loaders.poly_spot_to_list(spot_size_str)
                 try:
-                    spot_intensity = tr[INTENSITY_FIELD_NAME]  # type: float
+                    laser_intensity = tr[INTENSITY_FIELD_NAME]  # type: float
+
                 except ValueError:  # very first recordings don't have this field, and were recorded with this power.
-                    spot_intensity = 187.
+                    laser_intensity = 187.
                 nd = allstarts[i + 1]
                 pulse_idxes = np.where((pulse_starts >= st) & (pulse_starts < nd))[0]
                 numpulses = len(pulse_idxes)
                 sequence_frames = list()
                 sequence_times = list()
-                if numpulses - 2 == len(laser_spots):
-                    # assert numpulses - 2 == len(laser_spots)
+                if numpulses - (start_frame + 1) == len(laser_spots):
+                    # pulses include a start blank frame (sometimes), and end blank frame. These are inferred
+                    # and are not listed as spots.
                     assert meta_loaders.find_list_depth(laser_spots) < 4
-                    # minus 2 for two blank frame pulses, one before and one after the stimulus spots.
                     # even if we are presenting multiple spots in a frame (or pulse), they will be
                     # represented in a list. So we'll have a spot lists like: [[[2,3],[4,3]], [[2,1], [3,4]]],
                     # where we have 2 frames each with 2 spots, but the length of laser_spots is 2.
-                    for j in range(1, numpulses - 1):  # were going to ignore the first and last stim spots (see above).
+                    for j in range(start_frame, numpulses - 1):   # skip the blank first frame if it's there.
+                        # we're going to ignore the first and last stim spots (see above).
                         i_p = pulse_idxes[j]
                         i_frame = j - 1  # the spots start at index 0
                         t_frame = pulse_starts[i_p]
                         spots_frame = laser_spots[i_frame]
                         spot_size = spot_sizes[i_frame]
                         depth = meta_loaders.find_list_depth(spots_frame)
+                        frame_halftone = spot_halftone_intensity[j] / 255.
+                        spot_intensity = laser_intensity * frame_halftone
                         if depth == 1:  # only one spot in frame ([[3,3], [4,4]])
                             sf = Spot(spots_frame, spot_size, spot_intensity)  # making tuple because needs to be hashable.
                             self.unique_spots.add(sf)
@@ -131,7 +143,7 @@ class PatternSession(Session):
                             frame = Frame((sf,))
                         elif depth == 2:
                             spots_frame.sort()  # sort so that we guarantee consistent ordering of spot lists with same spots
-                            sfs = tuple([Spot(x, spot_size, spot_intensity) for x in spots_frame])  # make everything tupled.
+                            sfs = tuple([Spot(x, spot_size, laser_intensity) for x in spots_frame])  # make everything tupled.
                             self.unique_spots.add(*sfs)
                             frame = Frame(sfs)
                         else:

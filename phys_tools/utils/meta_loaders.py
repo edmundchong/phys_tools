@@ -96,8 +96,18 @@ def _get_date_from_voyeur_name(nodename):
     _, dt = nodename.split('D')
     d_str, t_str = dt.split('T')
     y, m, d = [int(x) for x in d_str.split('_')]
-    h, mn, s = [int(x) for x in t_str.split('_')]
+    h, mn, s = [int(x) for x in t_str.split('_')[:3]]  # beh would be the 4th element
     return datetime.datetime(y, m, d, h, mn, s)
+
+
+def _get_voyeur_protocol_name(meta_file: tb.File) -> str:
+    f = meta_file
+    b_nodes = f.list_nodes('/Voyeur')
+    name = ''
+    if b_nodes:
+        n = b_nodes[0]  # type: tb.Group
+        name = n._v_attrs['arduino_protocol_name'].decode()
+    return name
 
 
 def _load_ephys_trialstarts_by_run(meta_file: tb.File) -> list():
@@ -308,6 +318,8 @@ def poly_spot_to_list(string: str, _st=0, _return_i=False) -> list:
     :param _st: index to start processing string (default 0, used for recursion)
     :param _return_i: used for recursion, default False
     """
+    if not string:
+        return []
     i = _st
     the_list = []
     c = string[i]
