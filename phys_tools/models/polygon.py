@@ -14,8 +14,6 @@ class PatternUnit(Unit):
     def __init__(self, unit_id, spiketimes, rating, session):
         super(PatternUnit, self).__init__(unit_id, spiketimes, rating, session)
 
-        # TODO: make some good plotting functions.
-
     def plot_spots(self, pre_ms, post_ms, binsize_ms, sequences=None, axis=None, label='', color=None,
                    alpha=.8, linewidth=2, linestyle='-', convolve='gaussian') -> plt.Axes:
         """
@@ -40,7 +38,7 @@ class PatternUnit(Unit):
         ys = []
 
         if axis is None:
-            axis = plt.axes()  #type: Axes
+            axis = plt.axes()  # type: Axes
 
         if not sequences:
             sequences = self.session.sequence_dict.keys()
@@ -48,8 +46,8 @@ class PatternUnit(Unit):
             times = self.session.sequence_dict[seq]
             if len(seq) == 1 and len(seq.frames) == 1:
                 spot = seq.frames[0].spots[0]
-                p_x = spot.x
-                p_y = spot.y - 3  #TODO THIS IS A STUPID HACK TO CORRECT OFFSET!!!!!!
+                p_x = spot.x - self.session.extents['x'][0]
+                p_y = spot.y - self.session.extents['y'][0]
                 x, psth = self.get_psth_times(times, pre_ms, post_ms, binsize_ms, convolve=convolve)
                 o_y = -offset_y * p_y
                 o_x = offset_x * p_x
@@ -78,6 +76,7 @@ class PatternSession(Session):
         self.sequences = []
         self._intensities = set()
         self._coordinates = set()
+        self._extents = None
         super(PatternSession, self).__init__(*args, **kwargs)
         with tb.open_file(self.paths['meta'], 'r') as f:
             self.inhales, self.exhales = meta_loaders.load_sniff_events(f)
@@ -163,6 +162,7 @@ class PatternSession(Session):
                     ))
         self.sequence_dict = sequence_dict
 
+
     @property
     def unique_intensities(self):
         if not self._intensities:
@@ -176,6 +176,17 @@ class PatternSession(Session):
             for s in self.unique_spots:  # type: Spot
                 self._coordinates.add((s.x, s.y))
         return self._coordinates
+
+    @property
+    def extents(self):
+        if self._extents is None:
+            xs = [x[0] for x in self.unique_coordinates]
+            ys = [x[1] for x in self.unique_coordinates]
+            self._extents = {
+                'x': (min(xs), max(xs)),
+                'y': (min(ys), max(ys))
+            }
+        return self._extents
 
     def filter_spots(self, coordinate=None, intensity=None):
         """

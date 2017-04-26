@@ -24,6 +24,15 @@ def make_file_paths(dat_path, suffix='1'):
     return templates, result, meta
 
 
+def make_lfp_path(dat_path):
+    basedir, dat = os.path.split(dat_path)
+    name = os.path.splitext(dat)[0]
+    result = os.path.join(basedir, '{}_lfp.h5'.format(name))
+    if not os.path.exists(result):
+        result = None
+    return result
+
+
 def find_probe_file(dat_path):
     """ finds probe file in session folder. """
     prb_file = None

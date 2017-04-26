@@ -416,13 +416,16 @@ class Session(ABC):
         self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)
         fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
         fn_probe = spyking_loaders.find_probe_file(dat_file_path)
+
         self.paths = {
             'dat': dat_file_path,
             'templates': fn_templates,
             'results': fn_results,
             'meta': fn_meta,
-            'probe': fn_probe
+            'probe': fn_probe,
+            'lfp': spyking_loaders.make_lfp_path(dat_file_path)
         }
+
         self._unit_subset = None
         with tb.open_file(fn_meta, 'r') as f:  # type: tb.File
             try:
