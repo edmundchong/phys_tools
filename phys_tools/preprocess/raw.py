@@ -368,7 +368,8 @@ def process_oEphys_rec(open_ephys_recording_folder,
                     logging.info('Complete.')
 
                 assert os.path.getsize(temp_dat_fn) == total_expected_dat_size
-
+                logging.info('Renaming temp dat file...')
+                os.rename(temp_dat_fn, dat_fn)
                 if i_run < 1:
                     create_lfp_file = True
                 else:
@@ -376,8 +377,7 @@ def process_oEphys_rec(open_ephys_recording_folder,
                 _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
                           dtype=file_dtype, expectedrows=EXPECTED_LFP_ROWS)
                 # expected rows is hard-coded for a 30 minute recording @ 1kHz
-                logging.info('Renaming temp dat and lfp files...')
-                os.rename(temp_dat_fn, dat_fn)
+                logging.info('Renaming LFP file...')
                 os.rename(temp_lfp_fn, lfp_fn)
             if process_aux:
                 for m_chs in (meta_event_dict, meta_stream_dict):

@@ -74,8 +74,6 @@ class MainWindow(QMainWindow):
         fullscreen_Action.setShortcut("Ctrl+E")
         filemenu.addAction(fullscreen_Action)
 
-
-
         toolmenu = menu.addMenu('Subset')
         act = self.unit_sub_dock.toggleViewAction()  # type: QAction
         act.setText('Open subset list')
@@ -110,6 +108,9 @@ class MainWindow(QMainWindow):
             self.showMaximized()
 
 
+
+
+
 class MainWidgetEphys(QWidget):
     units_selected = pyqtSignal(list)
     update_unit_list = pyqtSignal(dict)
@@ -132,6 +133,7 @@ class MainWidgetEphys(QWidget):
         self.update_unit_list.connect(self.unit_list_widget.update_list)
         self.unit_list_widget.setSelectionMode(QListWidget.ExtendedSelection)
         self.unit_list_widget.itemSelectionChanged.connect(self.unit_selection_changed)
+        self.unit_list_widget.stability.connect(self.show_stability)
 
         self.session_selector = QListWidget(self,)
         self.session_selector.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -220,9 +222,15 @@ class MainWidgetEphys(QWidget):
         selected_units = [self.selected_session_units[x.text()] for x in selected_items]
         self.units_selected.emit(selected_units)
 
+    @pyqtSlot(QListWidgetItem)
+    def show_stability(self, item):
+        unit = self.selected_session_units[item.text()]
+        stability_dialog = StabilityWidget(self, unit)
+        stability_dialog.show()
 
 class UnitListWidget(QListWidget):
     addtosubset = pyqtSignal(list)
+    stability = pyqtSignal(QListWidgetItem)
 
     def __init__(self, parent):
         self.unit_models = []
@@ -233,6 +241,8 @@ class UnitListWidget(QListWidget):
         self.setDragDropMode(QListWidget.DragOnly)
         self.setStatusTip("Press 's' to add unit to subset")
         self.itemActivated.connect(self._itemActivated)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._context)
 
     @pyqtSlot(dict)
     def update_list(self, selected_units: dict):
@@ -258,6 +268,23 @@ class UnitListWidget(QListWidget):
     @pyqtSlot(QListWidgetItem)
     def _itemActivated(self, item):
         self.addtosubset.emit([item])
+
+    @pyqtSlot(QPoint)
+    def _context(self,pos):
+        item = self.currentItem()
+        if item:
+            self._currentitem = item
+            pos = self.mapToGlobal(pos)
+
+            menu = QMenu()
+            menu.addAction("Stability", self._stability)
+            menu.exec(pos)
+
+    @pyqtSlot()
+    def _stability(self):
+        item = self.currentItem()
+        print(item)
+        self.stability.emit(item)
 
 
 class UnitSubsetWidget(QWidget):
@@ -604,3 +631,10 @@ class RasterViewWidget(QWidget):
     @abstractmethod
     def update_unit_plots(self, units):
         raise NotImplementedError('This method needs to be overwritten with logic to plot psths.')
+
+
+class StabilityWidget(QWidget):
+    def __init__(self, parent, unit=None):
+        super(StabilityWidget, self).__init__(parent, )
+        self.setWindowFlags(Qt.Window)
+        self.setFixedSize(300,400)
