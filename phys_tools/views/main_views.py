@@ -22,7 +22,7 @@ class MainWindow(QMainWindow):
     units_selected = pyqtSignal(list)
     update_unit_list = pyqtSignal(dict)
 
-    def __init__(self, session_model_type, SessionViewType, windowname=''):
+    def __init__(self, session_model_type, SessionViewType, windowname='', to_open=[]):
         """
         Makes window to display unit and session widgets. Both view and models are customized to match
         different data found in different sessions using the two parameters.
@@ -98,6 +98,10 @@ class MainWindow(QMainWindow):
         self.unit_models = {}
         self.selected_session_models = []
         self.selected_session_units = {}
+
+        if to_open:
+            self.load_files(to_open)
+
 
     def _make_session_selector(self):
         session_selector = QListWidget(self)
