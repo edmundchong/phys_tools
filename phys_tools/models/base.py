@@ -13,7 +13,7 @@ class Unit(ABC):
     """
     Container for unit information and related functions.
     """
-    def __init__(self, unit_id, spiketimes, rating, session):
+    def __init__(self, unit_id, spiketimes, rating, session: 'Session'):
         """
         :param unit_id: Identifier for unit. typically int or string.
         :param spiketimes: array of spiketimes

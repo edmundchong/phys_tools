@@ -16,8 +16,9 @@ class OdorUnit(Unit):
     """
     Unit class for unit exposed to odor stimuli.
     """
-    def __init__(self, unit_id, spiketimes: np.ndarray, rating, session):
+    def __init__(self, unit_id, spiketimes: np.ndarray, rating, session: 'OdorSession'):
         super(OdorUnit, self).__init__(unit_id, spiketimes, rating, session)
+        self.session = session
 
     def get_odor_psth(self, odor, concentration, pre_ms, post_ms, binsize_ms, convolve=False):
         """
