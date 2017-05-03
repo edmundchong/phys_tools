@@ -213,12 +213,13 @@ def process_oEphys_rec(open_ephys_recording_folder,
                        meta_event_dict: dict,
                        voyeur_paths: list,
                        pl_trig_ch: int,
-                       raw_prefixes=['100'],
+                       raw_prefixes=('100',),
                        debug_plots=True,
                        file_dtype='int16',
                        clean_on_exemption=True,
                        process_aux=True,
-                       process_neural=True
+                       process_neural=True,
+                       process_lfp=True
                        ):
     """
     Preprocessing script for electrophysiology data.
@@ -370,15 +371,16 @@ def process_oEphys_rec(open_ephys_recording_folder,
                 assert os.path.getsize(temp_dat_fn) == total_expected_dat_size
                 logging.info('Renaming temp dat file...')
                 os.rename(temp_dat_fn, dat_fn)
-                if i_run < 1:
-                    create_lfp_file = True
-                else:
-                    create_lfp_file = False
-                _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
-                          dtype=file_dtype, expectedrows=EXPECTED_LFP_ROWS)
-                # expected rows is hard-coded for a 30 minute recording @ 1kHz
-                logging.info('Renaming LFP file...')
-                os.rename(temp_lfp_fn, lfp_fn)
+                if process_lfp:
+                    if i_run < 1:
+                        create_lfp_file = True
+                    else:
+                        create_lfp_file = False
+                    _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
+                              dtype=file_dtype, expectedrows=EXPECTED_LFP_ROWS)
+                    # expected rows is hard-coded for a 30 minute recording @ 1kHz
+                    logging.info('Renaming LFP file...')
+                    os.rename(temp_lfp_fn, lfp_fn)
             if process_aux:
                 for m_chs in (meta_event_dict, meta_stream_dict):
                     for k, v in m_chs.items():
@@ -719,7 +721,7 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
         assert isinstance(f, tb.File)
         f.set_node_attr('/', 'acquisition_frequency_hz', acquistion_frequency)
         logging.debug("copying Voyeur beh files:")
-        f.create_group('/', 'Voyeur')
+        v_grp = f.create_group('/', 'Voyeur')
         for fn in voyeur_files:
             _, filename = os.path.split(fn)
             v_name, _ = os.path.splitext(filename)
@@ -727,7 +729,8 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
                 logging.debug("{}".format(fn))
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=tb.NaturalNameWarning)
-                    run.copy_node('/', f.root.Voyeur, v_name, recursive=True)
+                    run_grp = run.copy_node('/', v_grp, v_name)
+                    run.copy_node('/Trials', run_grp, 'Trials')
 
         for name, ch in stream_channels.items():
             logging.info('Writing stream {}'.format(name))
