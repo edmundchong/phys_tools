@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
 
     def _make_subset_dock(self):
         unit_sub_dock = QDockWidget('Subset Editor', self)
-        unit_subset_widget = UnitSubsetWidget()
+        unit_subset_widget = UnitSubsetWidget(unit_sub_dock)
         unit_sub_dock.setWidget(unit_subset_widget)
         unit_sub_dock.hide()
         unit_sub_dock.setFeatures(QDockWidget.DockWidgetClosable)
@@ -325,7 +325,7 @@ class UnitSubsetWidget(QWidget):
             if not filename:
                 return
             p = self.parent().parent() #type: MainWindow
-            all_units = p.mainwidget.unit_models
+            all_units = p.unit_models
             units_to_save = []
             n_units = self.list.count()
 
