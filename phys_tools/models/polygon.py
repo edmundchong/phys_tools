@@ -215,7 +215,7 @@ class PatternSession(Session):
                 coordinate_set.add(f)
         else:
             for f in sequences:  #type: FrameSequence
-                if f.coordinates[0][0] == coordinate:
+                if coordinate in [j for i in f.coordinates for j in i]:
                     coordinate_set.add(f)
 
         if intensity is None:
@@ -256,6 +256,7 @@ class FrameSequence:
         self.nframes = len(frames)
         self.frametimes_relative = frametimes_relative  # this is for
         self.start = frametimes[0]
+        self._unique_spots = None  # property
 
     @property
     def intensities(self):
@@ -264,6 +265,15 @@ class FrameSequence:
     @property
     def coordinates(self):
         return [x.coordinates for x in self.frames]
+
+    @property
+    def unique_spots(self):
+        if self._unique_spots is None:
+            self._unique_spots = set()
+            for fr in self.frames:
+                for spt in fr.spots:
+                    self._unique_spots.add(spt)
+        return self._unique_spots
 
     def __hash__(self):
         # we're using the relative frametimes here. obviously absolute frametimes will be different between
