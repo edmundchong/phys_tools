@@ -151,25 +151,34 @@ def load_aligned_trials(meta_file: tb.File) -> list:
     :param meta_file: open meta tb.File object
     :return:  [(t1_start_time, t1_table_row), ... (tN_start_time, tN_table_row)]
     """
-    voyeur_tbr = _load_voyeur_trials_by_run(meta_file)
-    ts_br = _load_ephys_trialstarts_by_run(meta_file)
-    if not len(voyeur_tbr) == len(ts_br):
+    voyeur_trs_byrun = _load_voyeur_trials_by_run(meta_file)
+    e_trs_byrun = _load_ephys_trialstarts_by_run(meta_file)
+    if not len(voyeur_trs_byrun) == len(e_trs_byrun):
         erst = "Diffrent number of runs is detected in \
-            Voyeur nodes ({}) and recorded trial starts ({})".format(len(voyeur_tbr), len(ts_br))
+            Voyeur nodes ({}) and recorded trial starts ({})".format(len(voyeur_trs_byrun), len(e_trs_byrun))
         raise ValueError(erst)
 
     all_trials = []
-    for v_trials, e_trials in zip(voyeur_tbr, ts_br):
+
+    assert len(voyeur_trs_byrun) == len(e_trs_byrun), "number of runs detected is different between voyeur and ephys recording."
+    nruns = len(voyeur_trs_byrun)
+    for i in range(nruns):
+        v_trials, e_trials = voyeur_trs_byrun[i], e_trs_byrun[i]
         v_trial_nums = v_trials['trialNumber']
         e_trial_nums = np.array([x[1] for x in e_trials])
         intersecting_trial_numbers = np.intersect1d(v_trial_nums, e_trial_nums)
         a = np.setdiff1d(v_trial_nums, e_trial_nums)
         b = np.setdiff1d(e_trial_nums, v_trial_nums)
 
-        if a:
-            "Voyeur trials {} were not found in recording."
-        if b:
-            "Trial numbers: {} found in recording but not in voyeur file."
+        if len(a):
+            "Trial number mismatch. {} trials found in voyeur file but not ephys serial for run {} of {}".format(
+                len(a), i, nruns
+            )
+        if len(b):
+            "Trial number mismatch. {} trials found in ephys but not voyeur file for run {} of {}".format(
+                len(b), i, nruns
+            )
+
         for tn in intersecting_trial_numbers:
             _v_i = np.where(v_trial_nums == tn)[0]
             assert (len(_v_i) == 1)
