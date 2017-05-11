@@ -413,6 +413,9 @@ class Session(ABC):
     unit_type = Unit
 
     def __init__(self, dat_file_path: str, suffix='-1'):
+
+        if not os.path.isabs(dat_file_path):
+            dat_file_path = os.path.join(os.getcwd(), dat_file_path)
         self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)
         fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
         fn_probe = spyking_loaders.find_probe_file(dat_file_path)
@@ -468,20 +471,23 @@ class Session(ABC):
     @staticmethod
     def _parse_path(path: str) -> tuple:
         """
-        Parse path structured like .../mouse_XXXX/sess_YYY/Z.dat
-        Xs parsed as subject_id number, Ys are session number, Z is rec name
+        Parse path structured like .../mouse_([0-9]+)/sess_([0-9]+)/([*]+).*
 
         :param path: path string to parse. May be relative or absolute.
         :return (subject_id, session, rec)
         """
         if not os.path.isabs(path):
             path = os.path.join(os.getcwd(), path)
-        a = path.find('mouse_')
-        subject = int(path[a + 6:a + 10])
-        c = path.find('sess_')
-        sessionnumber = int(path[c + 5:c + 8])
-        recname = path[c + 9:c + 10]
-        return subject, sessionnumber, recname
+
+        remainder, rec_sub = os.path.split(path)
+        remainder, sess_sub = os.path.split(remainder)
+        remainder, subj_sub = os.path.split(remainder)
+        recname, _ = os.path.splitext(rec_sub)
+        _, sess = sess_sub.split('_')
+        _, subj = subj_sub.split('_')
+        sess, subj = [int(x) for x in [sess, subj]]
+
+        return subj, sess, recname
 
     @abstractmethod
     def _make_stimuli(self, meta_file: tb.File):

@@ -37,7 +37,6 @@ def find_probe_file(dat_path):
     """ finds probe file in session folder. """
     prb_file = None
     basedir, dat = os.path.split(dat_path)
-    print(basedir)
 
     prb_files = glob(os.path.join(basedir, '*.prb'))
 
