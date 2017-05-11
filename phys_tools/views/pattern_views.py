@@ -57,6 +57,7 @@ class PatternSessionWidget(QWidget):
         if len(self.plotted_units) and len(self.plotted_stims):
             self.plot_params_updated.emit(self.plotted_units, self.plotted_stims)
 
+
 class SpotMapViewWidget(PsthViewWidget):
 
     def __init__(self, *args, **kwargs):
@@ -68,7 +69,7 @@ class SpotMapViewWidget(PsthViewWidget):
         stims = self.parent().filter.filtered_stims
         self.plot.axis.cla()
         self.plot.axis.set_axis_off()
-        self._current_units = units
+        self.current_units = units
         mthd = self.method_box.currentText()
         pre, pst, bs = self.pre_pad_box.value(), self.post_pad_box.value(), self.binsize_box.value()
         if stims:
