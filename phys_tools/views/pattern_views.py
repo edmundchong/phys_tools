@@ -26,6 +26,7 @@ class PatternSessionWidget(QWidget):
         self.stimuli_updated.connect(self.filter.update_stims)
         self.plotted_stims = set()
         self.filter.show()  # TODO: make ui callable.
+        self.filter.raise_()
 
 
     def sizeHint(self):
@@ -62,11 +63,15 @@ class SpotMapViewWidget(PsthViewWidget):
 
     def __init__(self, *args, **kwargs):
         super(SpotMapViewWidget, self).__init__(*args, **kwargs)
+        self._stims = None
         self.plot.axis.set_axis_off()
 
-    @pyqtSlot(list)
-    def update_unit_plots(self, units):
-        stims = self.parent().filter.filtered_stims
+    @pyqtSlot(list, set)
+    def update_unit_plots(self, units, stims=None):
+        if stims is None:
+            stims = self._stims
+        else:
+            self._stims = stims
         self.plot.axis.cla()
         self.plot.axis.set_axis_off()
         self.current_units = units

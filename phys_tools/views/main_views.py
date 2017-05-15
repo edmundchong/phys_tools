@@ -2,6 +2,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
@@ -497,8 +498,14 @@ class PsthViewWidget(QWidget):
         super(PsthViewWidget, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QHBoxLayout(self)
+        plt_layout = QVBoxLayout()
+
         self.plot = _PlotCanvas(self)
-        layout.addWidget(self.plot)
+        self.toolbar = NavToolbar(self.plot, self)
+        plt_layout.addWidget(self.toolbar)
+        plt_layout.addWidget(self.plot)
+
+        layout.addLayout(plt_layout)
 
         controls_layout = QVBoxLayout()
         pre_pad_label = QLabel('Pre plot (ms)')
@@ -554,7 +561,7 @@ class PsthViewWidget(QWidget):
 
     @pyqtSlot(list)
     @abstractmethod
-    def update_unit_plots(self, units):
+    def update_unit_plots(self, units, ):
         raise NotImplementedError('This method needs to be overwritten with logic to plot psths.')
         # self.plot.clr()
         # self._current_units = units
@@ -576,8 +583,9 @@ class _PlotCanvas(FigureCanvas):
         self.axis = fig.add_subplot(111)  # type: Axes
         self.setParent(parent)
 
-        FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
-        FigureCanvas.updateGeometry(self)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.updateGeometry()
+
 
     def clr(self):
         self.axis.cla()
