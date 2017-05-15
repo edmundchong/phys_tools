@@ -2,6 +2,7 @@ from .base import *
 from ..utils import meta_loaders
 import numpy as np
 from typing import Tuple
+from collections import defaultdict
 
 
 SPOT_FIELD_NAME = 'spots'
@@ -9,6 +10,7 @@ SPOTSIZE_FIELD_NAME = 'spotsizes'
 INTENSITY_FIELD_NAME = 'LaserIntensity_MWmm2'  # assuming homogenous intensity for all spots.
 HALFTONE_FIELD_NAME = 'intensities'
 SPOT_TIMES_FIELD_NAME = 'timing'
+
 
 class PatternUnit(Unit):
     """Unit from PatternSession"""
@@ -80,6 +82,9 @@ class PatternSession(Session):
         self._intensities = set()
         self._coordinates = set()
         self._extents = None
+        self._spots_by_coord = None
+        self._seqs_by_spot = None
+        self._seqs_by_seq = None
         super(PatternSession, self).__init__(*args, **kwargs)
         with tb.open_file(self.paths['meta'], 'r') as f:
             self.inhales, self.exhales = meta_loaders.load_sniff_events(f)
@@ -172,7 +177,6 @@ class PatternSession(Session):
                     ))
         self.sequence_dict = sequence_dict
 
-
     @property
     def unique_intensities(self):
         if not self._intensities:
@@ -206,26 +210,53 @@ class PatternSession(Session):
         :param intensity: 
         :return: 
         """
-        coordinate_set = set()
-        intensity_set = set()
+
         sequences = self.sequence_dict.keys()
 
-        if coordinate is None:
-            for f in sequences:
-                coordinate_set.add(f)
+        if coordinate is None:  # if none, all sequences match the null
+            coordinate_set = set(sequences)
         else:
+            coordinate_set = set()
             for f in sequences:  #type: FrameSequence
-                if coordinate in [j for i in f.coordinates for j in i]:
+                if coordinate in [j for i in f.coordinates for j in i]:  # recursively look through all frame coords
                     coordinate_set.add(f)
 
-        if intensity is None:
-            for f in sequences:
-                intensity_set.add(f)
+        if intensity is None:  # if none, all sequences match the null
+            intensity_set = set(sequences)
         else:
+            intensity_set = set()
             for f in sequences:  # type: FrameSequence
                 if f.intensities[0][0] == intensity:
                     intensity_set.add(f)
         return intensity_set & coordinate_set
+
+    @property
+    def spots_by_coordinate(self):
+        if self._spots_by_coord is None:
+            by_coord = {}
+            for spot in self.unique_spots:
+                by_coord[(spot.x, spot.y)] = spot
+            self._spots_by_coord = by_coord
+        return self._spots_by_coord
+
+    @property
+    def seqs_by_spot(self):
+        if self._seqs_by_spot is None:
+            seqs = {}
+            for spot in self.unique_spots:
+                sptlist = [seq for seq in self.sequence_dict.keys() if spot in seq.unique_spots]
+                seqs[spot] = sptlist
+            self._seqs_by_spot = seqs
+        return self._seqs_by_spot
+
+    @property
+    def seqs_by_seq(self):
+        if self._seqs_by_seq is None:
+            seqs = defaultdict(list)
+            for seq in self.sequences:
+                seqs[seq].append(seq)
+            self._seqs_by_seq = seqs
+        return self._seqs_by_seq
 
 
 class FrameSequence:
