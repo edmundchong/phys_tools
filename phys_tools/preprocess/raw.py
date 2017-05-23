@@ -1,7 +1,7 @@
 import numpy as np
 from numba import jit
 import os
-from scipy.signal import decimate
+from scipy.signal import decimate, butter, filtfilt
 import tables as tb
 import shutil
 from . import meta_handlers
@@ -13,6 +13,8 @@ from .open_ephys_helpers import loadContinuous
 from tqdm import tqdm
 import pickle
 import warnings
+from typing import Iterable, Dict
+from collections import defaultdict
 try:
     import matplotlib.pyplot as plt
 except RuntimeError:
@@ -182,8 +184,8 @@ def process_spikegl_recording(raw_fn_list: list,
             _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
                       dtype=file_dtype, expectedrows=samps_per_ch)
 
-        make_meta(separated_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
-                  file_dtype, debug_plots)
+        make_meta_from_bins(separated_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
+                            file_dtype, debug_plots)
         logging.info('meta completed.')
 
         assert total_size == os.path.getsize(temp_dat_fn)
@@ -239,11 +241,13 @@ def process_oEphys_rec(open_ephys_recording_folder,
     :param neural_channel_numbers: openephys channels start at 1.
     :param meta_stream_dict: dictionary specifying streams: {name_string: channelnumber, ..}
     :param meta_event_dict: dictionary specifying streams: {name_string: channelnumber, ..}
-    :param voyeur_paths:
-    :param pl_trig_ch:
-    :param debug_plots:
-    :param file_dtype:
-    :param clean_on_exemption:
+    :param voyeur_paths: list of paths to voyeur files corresponding to this recording.
+    :param pl_trig_ch: What is the channel of PL trigger for 60Hz noise subtraction? Default None.
+    :param ebug_plots: plot during meta creation?
+    :param file_dtype: How is the data stored? (default: int16)
+    :param clean_on_exemption: Should we delete everything if the routine fails?
+    :param process_aux: Do you want to make a meta file?
+    :param process_neural: Do you want to extract spiketimes?
     :return:
     """
     file_dtype = np.dtype(file_dtype)
@@ -414,8 +418,8 @@ def process_oEphys_rec(open_ephys_recording_folder,
 
     try:
         if process_aux:
-            make_meta(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
-                      file_dtype, debug_plots)
+            make_meta_from_bins(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
+                                file_dtype, debug_plots)
             logging.info('Meta file completed.')
             os.rename(temp_meta_fn, meta_fn)
         completed = True
@@ -428,7 +432,7 @@ def process_oEphys_rec(open_ephys_recording_folder,
             logging.info('Cleaning up temp files...')
             shutil.rmtree(tmpdirname)
         elif not clean_on_exemption:
-            # save some data for an entrypoint back into make_meta.
+            # save some data for an entrypoint back into make_meta_from_bins.
             d = os.getcwd()
             fp = os.path.join(d, '{}_resume.pickle'.format(dat_fn))
             logging.info('Saving resume pickle file to: {}'.format(fp))
@@ -437,6 +441,116 @@ def process_oEphys_rec(open_ephys_recording_folder,
                              fs, file_dtype, debug_plots, tmpdirname, save_prefix), f)
         LOGGER.removeHandler(log_file_handler)
         log_file_handler.close()
+
+
+def process_wavesurfer_rec(
+        wavesurfer_path, voyeurpaths: list, save_prefix, meta_stream_dict: dict, meta_event_dict: dict,
+        neural_channel_indices=(0,), debug_plots=True, process_aux=True, process_neural=True, neural_threshold=5.
+):
+    """
+    
+    :param axonpath: path to axon HDF5 file.
+    :param voyeur_paths: list of paths to voyeur files corresponding to this recording. 
+    :param save_prefix: 
+    :param meta_stream_dict: ie {'streamname': 0, 'streamname2': 1}
+    :param meta_event_dict: ie {'eventsname': 0, 'eventsname2': 1}
+    :param neural_channel_indices: indeces of neural channels (default: (0,)
+    :param debug_plots: plot during meta creation?
+    :param process_aux: Do you want to make a meta file?
+    :param process_neural: Do you want to extract spiketimes?
+    :param neural_threshold: threshold for spikes (in standard deviations from mean) (default: 5)
+    :return: 
+    """
+    log_fn = "{}_{}.log".format(save_prefix, datetime.now().isoformat())
+    log_file_handler = logging.FileHandler(log_fn)
+    log_file_handler.setFormatter(LOG_FORMATTER)
+    LOGGER.addHandler(log_file_handler)
+
+
+    stream_arrays = defaultdict(list)
+    event_arrays = defaultdict(list)
+
+    with tb.open_file(wavesurfer_path) as f:  # type: tb.File
+        all_data = f.root.sweep_0001.analogScans.read()
+        fs = f.get_node('/header/Acquisition/SampleRate')[0, 0]
+        logging.info('Data loaded from {}'.format(wavesurfer_path))
+    if process_neural:
+        for ch in neural_channel_indices:
+            savepath = "{}_spiketimes{}.csv".format(save_prefix, ch)
+            logging.info('Extracting spikes for ch {} to {}.'.format(ch, savepath))
+            spiketimes = _find_juxta_spikes(all_data[ch, :], fs, neural_threshold)
+            with open(savepath, 'w') as f_save:
+                spiketimes.tofile(f_save, ",")
+    if process_aux:
+        for k, v in meta_stream_dict.items():
+            stream_arrays[k].append(all_data[v, :])
+        for k, v in meta_event_dict.items():
+            event_arrays[k].append(all_data[v, :])
+
+        meta_save_path = "{}_meta.h5".format(save_prefix)
+        make_meta(stream_arrays, event_arrays, voyeurpaths, meta_save_path, fs, debug_plots)
+
+    logging.info("Complete!")
+    LOGGER.removeHandler(log_file_handler)
+    log_file_handler.close()
+
+
+def _find_juxta_spikes(neural_signal: np.ndarray, fs: float, threshold_sd=5., lowcut=300., highcut=3000., debug_plots=True) -> np.ndarray:
+    """
+    Filter and find threshold crossings. Threshold is expressed in terms of standard deviations from mean.
+    
+    :param neural_signal: array of neural recording 
+    :param fs: sample rate for filter building
+    :param threshold_sd: threshold for filter building (default 5)
+    :param lowcut: lowcut  for filter
+    :param highcut: highcut for filter.
+    :return: 
+    """
+    nyquist = fs / 2
+    lowcutW = lowcut/nyquist
+    highcutW = highcut/nyquist
+    b, a = butter(3, (lowcutW, highcutW), 'bandpass')
+    filtered = filtfilt(b, a, neural_signal)  # zero phase delay.
+    threshold = filtered.std() * threshold_sd
+    if debug_plots:
+        plt.plot(filtered[:int(fs)], label='signal')
+        plt.plot(plt.xlim(),[threshold] * 2, '--r', alpha=.7, label='threshold {:0.1f}'.format(threshold_sd))
+        plt.legend(loc='best')
+        plt.title('neural channel excerpt')
+        plt.show()
+    thresholded = filtered > threshold
+    crossings, = np.where(np.convolve([1,-1], thresholded, 'valid') == 1)
+
+    if debug_plots:
+        pad = int(fs/1000.)
+
+        amplitudes = np.zeros(len(crossings), dtype=filtered.dtype)
+        for i in range(len(crossings)):
+            c = crossings[i]
+            nd = int(c + pad+.5)
+            excerpt = filtered[c: nd]
+            amplitudes[i] = excerpt.max()
+        plt.plot(crossings / fs, amplitudes, '.', alpha=.5, markersize=1)
+        plt.ylim([0, None])
+        plt.plot(plt.xlim(), [threshold]*2, '--r', alpha=.7, label='threshold')
+        plt.ylabel('spike amplitude')
+        plt.xlabel('recording time (s)')
+        plt.legend(loc='best')
+        plt.title('spike amplitude over time')
+        plt.show()
+
+        x = np.linspace(-1, 1, pad * 2)
+        for i in range(0, len(crossings), 50):
+            c = crossings[i]
+            st = int(c - pad)
+            nd = int(c + pad)
+            plt.plot(x, filtered[st:nd], alpha=.3)
+        plt.title('waveforms')
+        plt.xlabel('time (ms)')
+        plt.show()
+
+    return crossings
+
 
 def resume(resume_file_path):
     """
@@ -453,8 +567,8 @@ def resume(resume_file_path):
     LOGGER.addHandler(log_file_handler)
     logging.info('Opened {}'.format(resume_file_path))
 
-    make_meta(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
-              file_dtype, debug_plots)
+    make_meta_from_bins(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
+                        file_dtype, debug_plots)
 
 
 def _read_meta(path):
@@ -701,14 +815,15 @@ def _make_lfp(raw_files_prefix: str, channels, lfp_filename, acquistion_frequenc
     logging.info('Complete.')
 
 
-def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_files, save_fn,
-              acquistion_frequency, dtype=np.int16, debug_plots=False):
+def make_meta_from_bins(raw_files_prefixes: Iterable, stream_channels: dict, event_channels: dict, voyeur_files: Iterable,
+                        save_fn: str, acquistion_frequency: float, dtype=np.int16, debug_plots=False):
     """
-
-    :param raw_files_prefixes:
-    :param stream_channels:
-    :param event_channels:
-    :param voyeur_files:
+    Load streams from binarys and call make_meta
+    
+    :param raw_files_prefixes: path prefix to binary files.
+    :param stream_channels: dictionary of {stream_names: channel_numbers}
+    :param event_channels: dictionary of {event_names: channel_numbers}
+    :param voyeur_files: iterable 
     :param save_fn: name of the meta h5 file to save.
     :param acquistion_frequency:
     :param dtype: dtype the raw files are saved in.
@@ -716,6 +831,40 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
     :return:
     """
     ch = 1  # in case we have no specified channels we'll read from channel 1...
+    logging.info("Loading stream and event arrays from dats.".format(save_fn))
+    streams = defaultdict(list)
+    events = defaultdict(list)
+    for name, ch in stream_channels.items():
+        for prefix in raw_files_prefixes:
+            fn = _gen_channel_fn(prefix, ch)
+            a = np.fromfile(fn, dtype)
+            streams[name].append(a)
+    for name, ch in event_channels.items():
+        for prefix in raw_files_prefixes:
+            fn = _gen_channel_fn(prefix, ch)
+            a = np.fromfile(fn, dtype)
+            events[name].append(a)
+
+    return make_meta(streams, events, voyeur_files, save_fn, acquistion_frequency, debug_plots)
+
+
+def make_meta(streams: Dict, events: Dict, voyeur_files: Iterable, save_fn: str, acquistion_frequency: float,
+              debug_plots=False):
+    """
+    Generalized meta file maker that takes pre-loaded streams and arrays. Data arrays should be a list of arrays: 
+    ie [stream_run_1, stream_run_2, ...].
+    
+    :param streams: dictionary of arrays to save as streams. Arrays will be saved to the Streams node of meta file.
+    :param events: dictionary of arrays from which to extract events. 
+    :param voyeur_files: iterable containg
+    :param save_fn: 
+    :param acquisition_frequency: 
+    :param debug_plots: 
+    :return: 
+    """
+
+    n_runs = 0
+    run_sizes = []
     logging.info("Making meta HDF5 file {}".format(save_fn))
     with tb.open_file(save_fn, 'w') as f:
         assert isinstance(f, tb.File)
@@ -731,28 +880,22 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
                     warnings.filterwarnings("ignore", category=tb.NaturalNameWarning)
                     run_grp = run.copy_node('/', v_grp, v_name)
                     run.copy_node('/Trials', run_grp, 'Trials')
-
-        for name, ch in stream_channels.items():
+        for name, stream_chunks in streams.items():
+            if not n_runs:
+                n_runs = len(stream_chunks)
+                run_sizes = [len(x) for x in stream_chunks]
             logging.info('Writing stream {}'.format(name))
-            stream_chunks = []
-            for prefix in raw_files_prefixes:
-                fn = _gen_channel_fn(prefix, ch)
-                a = np.fromfile(fn, dtype)
-                stream_chunks.append(a)
             stream = np.concatenate(stream_chunks)
             if debug_plots:
                 plt.plot(stream[:STREAM_PLOT_NSAMP])
                 plt.title(name)
                 plt.show()
             f.create_carray('/Streams', name, createparents=True, obj=stream, filters=STREAM_FILTER)
-        f.create_group('/', 'Events')
-        for name, ch in event_channels.items():
+        for name, stream_chunks in events.items():
+            if not n_runs:
+                n_runs = len(stream_chunks)
+                run_sizes = [len(x) for x in stream_chunks]
             logging.info('Making events for {}.'.format(name))
-            stream_chunks = []
-            for prefix in raw_files_prefixes:
-                fn = _gen_channel_fn(prefix, ch)
-                a = np.fromfile(fn, dtype)
-                stream_chunks.append(a)
             stream = np.concatenate(stream_chunks)
             if debug_plots:
                 plt.plot(stream[:EVENT_PLOT_NSAMP])
@@ -760,21 +903,13 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
                 plt.show()
             events = meta_handlers.processors[name](stream, acquistion_frequency)
             f.create_carray('/Events', name, createparents=True, obj=events)
-
-        run_ends = np.zeros(len(raw_files_prefixes), dtype=np.uint64)
-        end = 0
-        for i, prefix in enumerate(raw_files_prefixes):
-            #TODO: if there are no event/stream channels, this will not work.
-            sz = os.path.getsize(_gen_channel_fn(prefix, ch))
-            end = end + sz
-            run_ends[i] = end/dtype.itemsize
-
-        f.create_carray('/Events', 'run_ends', obj=run_ends, title='run end samples.')
-    return
-
-
-
-
+        if run_sizes:
+            run_ends = np.zeros(len(run_sizes), dtype=np.uint64)
+            cv = 0
+            for i, v in enumerate(run_sizes):
+                cv += v
+                run_ends[i] = cv
+            f.create_carray('/Events', 'run_ends', obj=run_ends, title='run end samples.')
 
 
 def _get_number(path, ch_prefix):
