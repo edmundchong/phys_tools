@@ -1,6 +1,7 @@
 import tables as tb
 import numpy as np
 import datetime
+from typing import List, Tuple
 
 # these are strings that are used to define fieldnames.
 # If these change for different filetypes, you can change them here easily.
@@ -24,7 +25,7 @@ def _findfirst(start, array: np.array):
         return a[i]
 
 
-def load_sniff_events(meta_file: tb.File):
+def load_sniff_events(meta_file: tb.File) -> Tuple[np.ndarray]:
     """
     get sniffs form meta file.
 
@@ -65,23 +66,24 @@ def load_sniff_events(meta_file: tb.File):
     return inhales, exhales
 
 
-def _load_voyeur_trials_by_run(meta_file: tb.File) -> list:
+def _load_voyeur_trials_by_run(meta_file: tb.File) -> List:
     """
-    loads all voyeur trial tables and returns them in a sorted list.
+    loads all voyeur trial tables and returns them in a sorted .
+    
     :param meta_file: meta tb.File object
-    :return: list of all trials
+    :return: list of all trials by run
     """
     f = meta_file
     behavior_node_names = list(f.root.Voyeur._v_children.keys())
     behavior_node_dtg = [_get_date_from_voyeur_name(x) for x in behavior_node_names]
     _, behavior_node_names = zip(*sorted(zip(behavior_node_dtg, behavior_node_names)))
-    all_trials = []
+    trial_tables = []  # will be of len(nruns)
 
     for name in behavior_node_names:
         n = f.get_node('/Voyeur/{}'.format(name))
         run_trials = n.Trials.read()
-        all_trials.append(run_trials)
-    return all_trials
+        trial_tables.append(run_trials)
+    return trial_tables
 
 
 def _get_date_from_voyeur_name(nodename):
@@ -140,7 +142,7 @@ def _load_ephys_trialstarts_by_run(meta_file: tb.File) -> list():
     return ts_by_run
 
 
-def load_aligned_trials(meta_file: tb.File) -> list:
+def load_aligned_trials(meta_file: tb.File) -> List[tuple]:
     """
     Loads ephys trial starts and behavior trial starts. Aligns the two. Returns a list of trial start times with
     corresponding lines from voyeur behavior files.
@@ -158,7 +160,7 @@ def load_aligned_trials(meta_file: tb.File) -> list:
             Voyeur nodes ({}) and recorded trial starts ({})".format(len(voyeur_trs_byrun), len(e_trs_byrun))
         raise ValueError(erst)
 
-    all_trials = []
+    trial_starts_and_rows = []  # [(start_time1, table_row1)...]
 
     assert len(voyeur_trs_byrun) == len(e_trs_byrun), "number of runs detected is different between voyeur and ephys recording."
     nruns = len(voyeur_trs_byrun)
@@ -171,12 +173,16 @@ def load_aligned_trials(meta_file: tb.File) -> list:
         b = np.setdiff1d(e_trial_nums, v_trial_nums)
 
         if len(a):
-            "Trial number mismatch. {} trials found in voyeur file but not ephys serial for run {} of {}".format(
-                len(a), i, nruns
+            print(
+                "Trial number mismatch. {} trials found in voyeur file but not ephys serial for run {} of {}".format(
+                    len(a), i, nruns
+                )
             )
         if len(b):
-            "Trial number mismatch. {} trials found in ephys but not voyeur file for run {} of {}".format(
-                len(b), i, nruns
+            print(
+                "Trial number mismatch. {} trials found in ephys but not voyeur file for run {} of {}".format(
+                    len(b), i, nruns
+                )
             )
 
         for tn in intersecting_trial_numbers:
@@ -188,8 +194,9 @@ def load_aligned_trials(meta_file: tb.File) -> list:
             e_i = _e_i[0]
             tr = v_trials[v_i]
             start_time, _ = e_trials[e_i]
-            all_trials.append((start_time, tr))
-    return all_trials
+            trial_starts_and_rows.append((start_time, tr))
+    return trial_starts_and_rows
+
 
 def load_odor_stims(meta_fn) -> dict:
     """
