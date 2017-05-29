@@ -116,7 +116,7 @@ def process_spikegl_recording(raw_fn_list: list,
     meta_dtypes = []
     for r, m in zip(raw_fns, meta_fns):
         total_size += os.path.getsize(r)
-        chs, fs, meta_dtype = _read_meta(m)
+        chs, fs, meta_dtype = _read_sgl_meta(m)
         meta_dtypes.append(meta_dtype)
         nchs.append(len(chs))
 
@@ -137,11 +137,12 @@ def process_spikegl_recording(raw_fn_list: list,
             separated_prefix = os.path.join(tmpdirname, '{}_{}'.format(save_prefix, i))
             separated_prefixes.append(separated_prefix)
             r_fn = raw_fns[i]
+            samps_per_ch_run = os.path.getsize(r_fn) / total_chs / file_dtype.itemsize  # for pltrig
             m_fn = meta_fns[i]
             if not r_fn[0] == m_fn[0]:
                 logging.warning('raw and meta filenames are not similar: raw: {}, meta: {}'.format(r_fn, m_fn))
             logging.info('Separating {} to channels...'.format(r_fn))
-            chs, fs, _ = _read_meta(m_fn)
+            chs, fs, _ = _read_sgl_meta(m_fn)
             for ch in neural_channel_numbers:
                 if ch not in chs:
                     raise ValueError('Neural channel {} is not found in sgl meta file.'.format(ch))
@@ -164,7 +165,7 @@ def process_spikegl_recording(raw_fn_list: list,
 
                 # if there's greater that 20% error in the number of PL trigs compared to what we expect,
                 # raise exception.
-                seconds_recorded = samps_per_ch / fs
+                seconds_recorded = samps_per_ch_run / fs
                 expected_pl_trigs = seconds_recorded * 60.  # this is for 60 Hz (US) powerline AC.
                 if np.abs(len(pl_trig_times) - expected_pl_trigs) > expected_pl_trigs * 0.2:
                     raise ValueError("PL trigs")
@@ -571,7 +572,7 @@ def resume(resume_file_path):
                         file_dtype, debug_plots)
 
 
-def _read_meta(path):
+def _read_sgl_meta(path):
     """
     Reads SpikeGL meta file. Returns list of channel numbers in the order they are recorded and the sample rate of the
     acquisition system.[[
@@ -661,7 +662,7 @@ def _separate_channels(raw_fn, channels, prefix_str, overwrite=False, append=Fal
             for i, fn in enumerate(channel_fns):
                 with open(fn, 'ab') as f:
                     a[:, i].tofile(f)
-            # utils next block and repeat if it exists.
+            # load next block and repeat if it exists.
             a = np.fromfile(orig_file, dtype, samples_per_read)
             x = len(a)
 
