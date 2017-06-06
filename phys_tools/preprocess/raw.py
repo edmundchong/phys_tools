@@ -472,7 +472,13 @@ def process_wavesurfer_rec(
     event_arrays = defaultdict(list)
 
     with tb.open_file(wavesurfer_path) as f:  # type: tb.File
-        all_data = f.root.sweep_0001.analogScans.read()
+        nodename = None
+        for k in f.root._v_children.keys():
+            if k.startswith('sweep'):
+                nodename = "/{}/analogScans".format(k)
+        assert nodename is not None, "Can't find a scan node."
+        data_node = f.get_node(nodename)
+        all_data = data_node.read()
         fs = f.get_node('/header/Acquisition/SampleRate')[0, 0]
         logging.info('Data loaded from {}'.format(wavesurfer_path))
     if process_neural:
