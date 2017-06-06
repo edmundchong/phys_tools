@@ -212,9 +212,9 @@ class OdorSession(Session):
             st, tr = trials[i_tr]
             odors_by_olfa = []
             for s in _odor_fields_valid:
-                odor = tr[s]
-                if odor:
-                    odors_by_olfa.append(odor.decode())  # make into string from binary.
+                odor = tr[s].decode()
+                if odor and not odor.startswith("Air"):
+                    odors_by_olfa.append(odor)  # make into string from binary.
             assert len(odors_by_olfa) < 2, 'multiple concentrations functionality is not included.'
             if len(odors_by_olfa):
                 odor = odors_by_olfa[0]
