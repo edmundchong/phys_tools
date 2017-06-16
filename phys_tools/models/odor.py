@@ -276,7 +276,9 @@ class OdorSession(Session):
         Returns a sorted array of unique concentrations presented for a specified odorant.
         """
 
-        return self.concentrations_by_odor[odor]
+        mask = self.stimuli["odors"] == odor
+        concs = self.stimuli["odorconcs"][mask]
+        return np.unique(concs)
 
     @property
     def concentrations_by_odor(self) -> dict:
