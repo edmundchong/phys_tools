@@ -343,3 +343,30 @@ class OdorSession(Session):
                              linewidth=linewidth)  # will create/return new plot if None is supplied
         return axis
 
+    def get_no_odor_sniffs(self, pad=30000, filter=None):
+        """
+        returns a tuple of arrays with times of inhalations and exhalations that do not occur within a final valve
+        open time.
+
+        :param pad: the
+        :return:
+        """
+
+        inh_times = self.inhales
+        exh_times = self.exhales
+        fv_ons = self.stimuli['fv_ons']
+        fv_offs = self.stimuli['fv_offs']
+
+        padded_offs = fv_offs + pad
+
+        out_of_sniff = np.ones(len(inh_times), dtype='bool')
+
+        for on, off in zip(fv_ons, padded_offs):
+            fails = (inh_times > on) & (inh_times < off)
+            out_of_sniff[fails] = False
+
+        return inh_times[out_of_sniff], exh_times[out_of_sniff]
+
+
+
+

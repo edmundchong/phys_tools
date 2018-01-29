@@ -33,7 +33,6 @@ class Unit(ABC):
         Firing rate in hz. Calculated from  (N_spikes / Record_length) if known, otherwise calculated using 
         mean ISI.
         """
-
         if self._fr is None:
             if self.session.recording_length is None:
                 isi_samples = np.mean(np.diff(self.spiketimes))
@@ -201,7 +200,7 @@ class Unit(ABC):
         :param post: number of samples after t0 to return for each trial.
         :return: trial array, spiketimes(samples) array, shape: (ntrials, (t_min, t_max))
         """
-        max_spikes = 10000
+        max_spikes = 1000000
         spiketimes = np.zeros(max_spikes, dtype=np.int)
         spiketrials = np.zeros(max_spikes, dtype=np.int)
         spikes = self.spiketimes
@@ -225,6 +224,9 @@ class Unit(ABC):
             spike_sub -= st
             spike_sub = spike_sub.astype(np.int) - pre  # uint can't be negative.
             nspikes = len(spike_sub)
+            end_i = c+nspikes
+            if end_i >= len(spiketimes):
+                spiketimes.resize(spiketimes.size + max_spikes)
             spiketimes[c:c+nspikes] = spike_sub
             spiketrials[c:c+nspikes] = i
             c += nspikes
@@ -412,12 +414,14 @@ def _autocorrelation(spiketimes, bin_edges, ):
 class Session(ABC):
     unit_type = Unit
 
-    def __init__(self, dat_file_path: str, suffix='-1'):
+    def __init__(self, dat_file_path: str, meta_file_path=None, suffix='-1'):
 
         if not os.path.isabs(dat_file_path):
             dat_file_path = os.path.join(os.getcwd(), dat_file_path)
         self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)
         fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
+        if meta_file_path is not None:
+            fn_meta = meta_file_path
         fn_probe = spyking_loaders.find_probe_file(dat_file_path)
 
         self.paths = {
@@ -476,20 +480,25 @@ class Session(ABC):
         :param path: path string to parse. May be relative or absolute.
         :return (subject_id, session, rec)
         """
-        if not os.path.isabs(path):
-            path = os.path.join(os.getcwd(), path)
+        try:
+            if not os.path.isabs(path):
+                path = os.path.join(os.getcwd(), path)
 
-        remainder, rec_sub = os.path.split(path)
-        remainder, sess_sub = os.path.split(remainder)
-        remainder, subj_sub = os.path.split(remainder)
-        recname, _ = os.path.splitext(rec_sub)
-        _, sess = sess_sub.split('_')
-        _, subj = subj_sub.split('_')
-        sess, subj = [int(x) for x in [sess, subj]]
+            remainder, rec_sub = os.path.split(path)
+            remainder, sess_sub = os.path.split(remainder)
+            remainder, subj_sub = os.path.split(remainder)
+            recname, _ = os.path.splitext(rec_sub)
+            _, sess = sess_sub.split('_')
+            _, subj = subj_sub.split('_')
+            sess, subj = [int(x) for x in [sess, subj]]
+        except:
+            subj=0
+            sess=0
+            recname=0
 
         return subj, sess, recname
 
-    @abstractmethod
+    # @abstractmethod
     def _make_stimuli(self, meta_file: tb.File):
         """
         Class specific - extract the stimuli you are expecting from your file.
@@ -645,3 +654,7 @@ class Session(ABC):
             axis.plot(x, sniffs[i, :], color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha)
         axis.plot([0] * 2, plt.ylim(), '--k', linewidth=1)
         return axis
+
+
+class PhySession(Session):
+    pass
