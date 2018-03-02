@@ -1,5 +1,5 @@
 import numpy as np
-from phys_tools.utils import meta_loaders, spyking_loaders
+from phys_tools.utils import meta_loaders
 import tables as tb
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
@@ -7,6 +7,7 @@ from matplotlib.axes import Axes
 from scipy.stats import norm
 import numba as nb
 import os
+from . import _spikes
 
 
 class Unit(ABC):
@@ -307,11 +308,11 @@ class Unit(ABC):
     def template(self):
         """only loads template data if/when requested."""
         if self._template is None:
-            self._template = spyking_loaders.load_templates(self.session.paths['templates'], self.unit_id)
+            self._template = self.session.spike_store.get_waveforms(self.unit_id)
         return self._template
 
     def plot_template(self, x_scale=20, y_scale=2, axis=None, color='b',
-                        alpha=1., linewidth=1, linestyle='-',):
+                        alpha=1., linewidth=1, linestyle='-', label=None, plot_all=True):
         """
         Plots the template (waveform) for spyking circus sorted spikes across all sites on the probe.
 
@@ -325,24 +326,30 @@ class Unit(ABC):
         :param alpha: line alpha for plot
         :param linewidth: for plot
         :param linestyle: for plot
+        :param plot_all: if true, plot all channels (even those that are all zeros)
         :return: axis
         """
         template = self.template
-        probe_positions = self.session.probe_geometry
+        probe_positions = self.session.spike_store.probe.positions
         if probe_positions is None:
             raise ValueError('Session {} is missing probe geometry. Check for prb file.')
         assert len(template) == len(probe_positions)
         if axis is None:
             axis = plt.axes()  # type: Axes
 
+        n = 0
         for i in range(len(template)):
             waveform = template[i]
-            # if np.any(waveform):
-            x_offset, y_offset = probe_positions[i]
-            x = np.linspace(0, x_scale, len(waveform)) + x_offset
-            y = waveform * y_scale + y_offset
+            if plot_all or np.any(waveform):
+                x_offset, y_offset = probe_positions[i]
+                x = np.linspace(0, x_scale, len(waveform)) + x_offset
+                y = waveform * y_scale + y_offset
+                if n == 0:
+                    axis.plot(x, y, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle, label=label)
+                else:
+                    axis.plot(x, y, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
 
-            axis.plot(x, y, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
+                n += 1
         return axis
 
     def plot_autocorrelation(self, binsize_ms=1, range_ms=30, axis=None, color='b'):
@@ -414,23 +421,23 @@ def _autocorrelation(spiketimes, bin_edges, ):
 class Session(ABC):
     unit_type = Unit
 
-    def __init__(self, dat_file_path: str, meta_file_path=None, suffix='-1'):
+    def __init__(self, dat_file_path: str, meta_file_path=None, suffix='-1', spikestoretype='spyking-circus'):
 
         if not os.path.isabs(dat_file_path):
             dat_file_path = os.path.join(os.getcwd(), dat_file_path)
-        self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)
-        fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
+        self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)  # todo: make more flexible.
+
+        spike_loader = _spikes.SPIKE_TYPES[spikestoretype]
+        self.spike_store = spike_loader(dat_file_path, suffix)  # type: _spikes.SpykingResult
+        self._make_units(self.spike_store.unit_ids, self.spike_store.spiketimes, self.spike_store.ratings)
+
         if meta_file_path is not None:
             fn_meta = meta_file_path
-        fn_probe = spyking_loaders.find_probe_file(dat_file_path)
 
         self.paths = {
             'dat': dat_file_path,
-            'templates': fn_templates,
-            'results': fn_results,
             'meta': fn_meta,
-            'probe': fn_probe,
-            'lfp': spyking_loaders.make_lfp_path(dat_file_path)
+            'lfp': self._make_lfp_path(dat_file_path)
         }
 
         self._unit_subset = None
@@ -446,12 +453,7 @@ class Session(ABC):
             except tb.NoSuchNodeError:
                 self.recording_length = None
             self.stimuli = self._make_stimuli(f)
-        sk_units = spyking_loaders.load_spiketimes_unstructured(fn_templates, fn_results)
-        self._make_units(sk_units)
-        if fn_probe:
-            self.probe_geometry = spyking_loaders.load_probe_positions(fn_probe)
-        else:
-            self.probe_geometry = None
+
         self._sniff = None  # container for sniff property
 
     def __str__(self):
@@ -463,11 +465,11 @@ class Session(ABC):
     def __lt__(self, other):
         return not self.__gt__(other)
 
-    def _make_units(self, unit_info, ):
+    def _make_units(self, numbers, spiketimes, ratings ):
         """
         different session types will instantiate different Unit types.
         """
-        numbers, spiketimes, ratings = unit_info
+
         self._unit_info = {'ids': numbers, 'ratings': ratings}  #save this to use for quicker indexing.
         self._units = [self.unit_type(i, st, r, self) for i, st, r in zip(numbers, spiketimes, ratings)]
         return
@@ -497,6 +499,15 @@ class Session(ABC):
             recname=0
 
         return subj, sess, recname
+
+
+    def _make_lfp_path(self, dat_path):
+        basedir, dat = os.path.split(dat_path)
+        name = os.path.splitext(dat)[0]
+        result = os.path.join(basedir, '{}_lfp.h5'.format(name))
+        if not os.path.exists(result):
+            result = None
+        return result
 
     # @abstractmethod
     def _make_stimuli(self, meta_file: tb.File):
