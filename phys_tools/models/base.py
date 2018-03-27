@@ -7,7 +7,7 @@ from matplotlib.axes import Axes
 from scipy.stats import norm
 import numba as nb
 import os
-from . import _spikes
+from . import spikes
 
 
 class Unit(ABC):
@@ -419,6 +419,9 @@ def _autocorrelation(spiketimes, bin_edges, ):
 
 
 class Session(ABC):
+    """
+    Hello!
+    """
     unit_type = Unit
 
     def __init__(self, dat_file_path: str, meta_file_path=None, suffix='-1', spikestoretype='spyking-circus'):
@@ -427,12 +430,14 @@ class Session(ABC):
             dat_file_path = os.path.join(os.getcwd(), dat_file_path)
         self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)  # todo: make more flexible.
 
-        spike_loader = _spikes.SPIKE_TYPES[spikestoretype]
+        spike_loader = spikes.SPIKE_TYPES[spikestoretype]
         self.spike_store = spike_loader(dat_file_path, suffix)  # type: _spikes.SpykingResult
         self._make_units(self.spike_store.unit_ids, self.spike_store.spiketimes, self.spike_store.ratings)
 
         if meta_file_path is not None:
             fn_meta = meta_file_path
+        else:
+            fn_meta = self._make_meta_path(dat_file_path)
 
         self.paths = {
             'dat': dat_file_path,
@@ -508,6 +513,15 @@ class Session(ABC):
         if not os.path.exists(result):
             result = None
         return result
+
+    def _make_meta_path(self, dat_path):
+        basedir, dat = os.path.split(dat_path)
+        name = os.path.splitext(dat)[0]
+        result = os.path.join(basedir, '{}_meta.h5'.format(name))
+        if not os.path.exists(result):
+            result = None
+        return result
+
 
     # @abstractmethod
     def _make_stimuli(self, meta_file: tb.File):

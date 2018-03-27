@@ -3,7 +3,8 @@ import logging
 import numpy as np
 from scipy.optimize import minimize
 from scipy.stats import norm
-from tqdm import tqdm
+from tqdm import tqdm, trange
+import numba as nb
 
 MAX_N = 30000
 MAX_TRIGGERS = 30000
@@ -321,37 +322,65 @@ def laseronsets(stream, *args):
     :param threshold: threshold value if you want to force it.
     :return: array shape (n laser ons, 2) with the first column being laser ons and the second column being offs
     """
-    lsr = np.zeros((MAX_TRIGGERS, 2), dtype=np.uint64)
-    lsr_starts = lsr[:, 0]
-    lsr_stops = lsr[:, 1]
-    nstarts = 0
-    lsr_on = False
-    laston = np.uint64(0)
+    lsr = np.zeros((MAX_TRIGGERS, 2), dtype=np.uint32)  # big enough for 1.6 days of recordings...
+    # lsr_starts = lsr[:, 0]
+    # lsr_stops = lsr[:, 1]
+    # nstarts = 0
+    # lsr_on = False
+    # laston = np.uint64(0)
 
     r = stream.max() - stream.min()
     threshold = stream.min() + r/2.
-    nstops = 0
+    # nstops = 0
 
-    for i in tqdm(range(len(stream)), unit='samp', desc='laser scan', unit_scale=True):
-        val = stream[i]
-        if not lsr_on and val > threshold and (val - laston > 500):
-            lsr_starts[nstarts] = i
-            nstarts += 1
-            lsr_on = True
-        elif lsr_on and val < threshold:
-            lsr_stops[nstops] = i
-            nstops += 1
-            lsr_on = False
-    if nstops:
-        return lsr[:nstops, :]
+    # for i in trange(len(stream), unit='samp', desc='laser scan', unit_scale=True):
+    #     val = stream[i]
+    #     if not lsr_on and val > threshold and (val - laston > 500):
+    #         lsr_starts[nstarts] = i
+    #         nstarts += 1
+    #         lsr_on = True
+    #     elif lsr_on and val < threshold:
+    #         lsr_stops[nstops] = i
+    #         nstops += 1
+    #         lsr_on = False
+
+    n_pulses = _findonsets(stream, lsr, threshold)
+
+    if n_pulses:
+        return lsr[:n_pulses, :]
     else:
         return np.array([], dtype=np.uint64)
+
+@nb.jit
+def _findonsets(stream, out, threshold):
+    n_pulses = 0
+    lsr_on = False
+    # laston = np.uint64(0)
+
+    for i in range(len(stream)):
+        val = stream[i]
+        if not lsr_on and val > threshold:
+            lsr_on = True
+            out[n_pulses, 0] = i
+        elif lsr_on and val < threshold:
+            out[n_pulses, 1] = i
+            n_pulses += 1
+            lsr_on = False
+    return n_pulses
+
+
+
+def dmd_frames(stream, fs=30000):
+    global MAX_TRIGGERS
+    MAX_TRIGGERS=int(1e7)
+    return laseronsets(stream, fs)
 
 
 processors = {
     'finalvalve': findfvopens_MC,
     'trial_starts': parse_serial_stream,
-    'laser': laseronsets
+    'laser': laseronsets,
+    'dmd_frames': dmd_frames
 }
 
 
