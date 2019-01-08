@@ -1,5 +1,5 @@
 import numpy as np
-from phys_tools.utils import meta_loaders, spyking_loaders
+from phys_tools.utils import meta_loaders
 import tables as tb
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
@@ -7,13 +7,14 @@ from matplotlib.axes import Axes
 from scipy.stats import norm
 import numba as nb
 import os
+from . import spikes
 
 
 class Unit(ABC):
     """
     Container for unit information and related functions.
     """
-    def __init__(self, unit_id, spiketimes, rating, session):
+    def __init__(self, unit_id, spiketimes, rating, session: 'Session'):
         """
         :param unit_id: Identifier for unit. typically int or string.
         :param spiketimes: array of spiketimes
@@ -33,7 +34,6 @@ class Unit(ABC):
         Firing rate in hz. Calculated from  (N_spikes / Record_length) if known, otherwise calculated using 
         mean ISI.
         """
-
         if self._fr is None:
             if self.session.recording_length is None:
                 isi_samples = np.mean(np.diff(self.spiketimes))
@@ -201,7 +201,7 @@ class Unit(ABC):
         :param post: number of samples after t0 to return for each trial.
         :return: trial array, spiketimes(samples) array, shape: (ntrials, (t_min, t_max))
         """
-        max_spikes = 10000
+        max_spikes = 1000000
         spiketimes = np.zeros(max_spikes, dtype=np.int)
         spiketrials = np.zeros(max_spikes, dtype=np.int)
         spikes = self.spiketimes
@@ -225,6 +225,9 @@ class Unit(ABC):
             spike_sub -= st
             spike_sub = spike_sub.astype(np.int) - pre  # uint can't be negative.
             nspikes = len(spike_sub)
+            end_i = c+nspikes
+            if end_i >= len(spiketimes):
+                spiketimes.resize(spiketimes.size + max_spikes)
             spiketimes[c:c+nspikes] = spike_sub
             spiketrials[c:c+nspikes] = i
             c += nspikes
@@ -305,11 +308,11 @@ class Unit(ABC):
     def template(self):
         """only loads template data if/when requested."""
         if self._template is None:
-            self._template = spyking_loaders.load_templates(self.session.paths['templates'], self.unit_id)
+            self._template = self.session.spike_store.get_waveforms(self.unit_id)
         return self._template
 
     def plot_template(self, x_scale=20, y_scale=2, axis=None, color='b',
-                        alpha=1., linewidth=1, linestyle='-',):
+                        alpha=1., linewidth=1, linestyle='-', label=None, plot_all=True):
         """
         Plots the template (waveform) for spyking circus sorted spikes across all sites on the probe.
 
@@ -323,24 +326,30 @@ class Unit(ABC):
         :param alpha: line alpha for plot
         :param linewidth: for plot
         :param linestyle: for plot
+        :param plot_all: if true, plot all channels (even those that are all zeros)
         :return: axis
         """
         template = self.template
-        probe_positions = self.session.probe_geometry
+        probe_positions = self.session.spike_store.probe.positions
         if probe_positions is None:
             raise ValueError('Session {} is missing probe geometry. Check for prb file.')
         assert len(template) == len(probe_positions)
         if axis is None:
             axis = plt.axes()  # type: Axes
 
+        n = 0
         for i in range(len(template)):
             waveform = template[i]
-            # if np.any(waveform):
-            x_offset, y_offset = probe_positions[i]
-            x = np.linspace(0, x_scale, len(waveform)) + x_offset
-            y = waveform * y_scale + y_offset
+            if plot_all or np.any(waveform):
+                x_offset, y_offset = probe_positions[i]
+                x = np.linspace(0, x_scale, len(waveform)) + x_offset
+                y = waveform * y_scale + y_offset
+                if n == 0:
+                    axis.plot(x, y, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle, label=label)
+                else:
+                    axis.plot(x, y, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
 
-            axis.plot(x, y, color=color, alpha=alpha, linewidth=linewidth, linestyle=linestyle)
+                n += 1
         return axis
 
     def plot_autocorrelation(self, binsize_ms=1, range_ms=30, axis=None, color='b'):
@@ -410,19 +419,32 @@ def _autocorrelation(spiketimes, bin_edges, ):
 
 
 class Session(ABC):
+    """
+    Hello!
+    """
     unit_type = Unit
 
-    def __init__(self, dat_file_path: str, suffix='-1'):
-        self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)
-        fn_templates, fn_results, fn_meta = spyking_loaders.make_file_paths(dat_file_path, suffix)
-        fn_probe = spyking_loaders.find_probe_file(dat_file_path)
+    def __init__(self, dat_file_path: str, meta_file_path=None, suffix='-1', spikestoretype='spyking-circus'):
+
+        if not os.path.isabs(dat_file_path):
+            dat_file_path = os.path.join(os.getcwd(), dat_file_path)
+        self.subject_id, self.sess_id, self.rec_id = self._parse_path(dat_file_path)  # todo: make more flexible.
+
+        spike_loader = spikes.SPIKE_TYPES[spikestoretype]
+        self.spike_store = spike_loader(dat_file_path, suffix)  # type: _spikes.SpykingResult
+        self._make_units(self.spike_store.unit_ids, self.spike_store.spiketimes, self.spike_store.ratings)
+
+        if meta_file_path is not None:
+            fn_meta = meta_file_path
+        else:
+            fn_meta = self._make_meta_path(dat_file_path)
+
         self.paths = {
             'dat': dat_file_path,
-            'templates': fn_templates,
-            'results': fn_results,
             'meta': fn_meta,
-            'probe': fn_probe
+            'lfp': self._make_lfp_path(dat_file_path)
         }
+
         self._unit_subset = None
         with tb.open_file(fn_meta, 'r') as f:  # type: tb.File
             try:
@@ -436,12 +458,7 @@ class Session(ABC):
             except tb.NoSuchNodeError:
                 self.recording_length = None
             self.stimuli = self._make_stimuli(f)
-        sk_units = spyking_loaders.load_spiketimes_unstructured(fn_templates, fn_results)
-        self._make_units(sk_units)
-        if fn_probe:
-            self.probe_geometry = spyking_loaders.load_probe_positions(fn_probe)
-        else:
-            self.probe_geometry = None
+
         self._sniff = None  # container for sniff property
 
     def __str__(self):
@@ -453,11 +470,11 @@ class Session(ABC):
     def __lt__(self, other):
         return not self.__gt__(other)
 
-    def _make_units(self, unit_info, ):
+    def _make_units(self, numbers, spiketimes, ratings ):
         """
         different session types will instantiate different Unit types.
         """
-        numbers, spiketimes, ratings = unit_info
+
         self._unit_info = {'ids': numbers, 'ratings': ratings}  #save this to use for quicker indexing.
         self._units = [self.unit_type(i, st, r, self) for i, st, r in zip(numbers, spiketimes, ratings)]
         return
@@ -465,22 +482,48 @@ class Session(ABC):
     @staticmethod
     def _parse_path(path: str) -> tuple:
         """
-        Parse path structured like .../mouse_XXXX/sess_YYY/Z.dat
-        Xs parsed as subject_id number, Ys are session number, Z is rec name
+        Parse path structured like .../mouse_([0-9]+)/sess_([0-9]+)/([*]+).*
 
         :param path: path string to parse. May be relative or absolute.
         :return (subject_id, session, rec)
         """
-        if not os.path.isabs(path):
-            path = os.path.join(os.getcwd(), path)
-        a = path.find('mouse_')
-        subject = int(path[a + 6:a + 10])
-        c = path.find('sess_')
-        sessionnumber = int(path[c + 5:c + 8])
-        recname = path[c + 9:c + 10]
-        return subject, sessionnumber, recname
+        try:
+            if not os.path.isabs(path):
+                path = os.path.join(os.getcwd(), path)
 
-    @abstractmethod
+            remainder, rec_sub = os.path.split(path)
+            remainder, sess_sub = os.path.split(remainder)
+            remainder, subj_sub = os.path.split(remainder)
+            recname, _ = os.path.splitext(rec_sub)
+            _, sess = sess_sub.split('_')
+            _, subj = subj_sub.split('_')
+            sess, subj = [int(x) for x in [sess, subj]]
+        except:
+            subj=0
+            sess=0
+            recname=0
+
+        return subj, sess, recname
+
+
+    def _make_lfp_path(self, dat_path):
+        basedir, dat = os.path.split(dat_path)
+        name = os.path.splitext(dat)[0]
+        result = os.path.join(basedir, '{}_lfp.h5'.format(name))
+        if not os.path.exists(result):
+            result = None
+        return result
+
+    def _make_meta_path(self, dat_path):
+        basedir, dat = os.path.split(dat_path)
+        name = os.path.splitext(dat)[0]
+        result = os.path.join(basedir, '{}_meta.h5'.format(name))
+        if not os.path.exists(result):
+            result = None
+        return result
+
+
+    # @abstractmethod
     def _make_stimuli(self, meta_file: tb.File):
         """
         Class specific - extract the stimuli you are expecting from your file.
@@ -636,3 +679,7 @@ class Session(ABC):
             axis.plot(x, sniffs[i, :], color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha)
         axis.plot([0] * 2, plt.ylim(), '--k', linewidth=1)
         return axis
+
+
+class PhySession(Session):
+    pass

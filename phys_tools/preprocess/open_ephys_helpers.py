@@ -27,7 +27,7 @@ RECORD_MARKER = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 255])
 # constants for pre-allocating matrices:
 MAX_NUMBER_OF_SPIKES = int(1e6)
 MAX_NUMBER_OF_RECORDS = int(1e6)
-MAX_NUMBER_OF_CONTINUOUS_SAMPLES = int(5e8)
+MAX_NUMBER_OF_CONTINUOUS_SAMPLES = int(1e9)
 MAX_NUMBER_OF_EVENTS = int(1e6)
 
 
@@ -438,3 +438,65 @@ def pack_2(folderpath, filename='openephys.dat', source='100', channels='all', d
 def _get_sorted_channels(folderpath):
     return sorted([int(f.split('_CH')[1].split('.')[0]) for f in os.listdir(folderpath)
                    if '.continuous' in f and '_CH' in f])
+
+
+    @staticmethod
+    def _parse_uuid(line: str, start_correction: int):
+        u = line.find('uuid')
+        if u > 0:
+            uuid = line.split(":")[-1][1:-1]
+            time = int(line.split(' ')[0]) - start_correction
+            return time, uuid
+        else:
+            return False
+
+    @staticmethod
+    def _parse_presentation(line: str, start_correction: int):
+        u = line.find('Starting presentation')
+        if u > 0:
+            s = line.split(' ')
+            pres_id = s[-1]
+            time = int(s[0]) - start_correction
+            return time, pres_id
+        else:
+            return False
+
+    @staticmethod
+    def _parse_uuid_sep(line: str):
+        u = line.find('uuid')
+        if u > -1:
+            uuid = line.split(":")[-1][1:-1]
+            return uuid
+        else:
+            return False
+
+    @staticmethod
+    def _parse_presentation_sep(line: str):
+        u = line.find('Starting presentation')
+        if u > -1:
+            s = line.split(' ')
+            pres_id = s[-1]
+            return pres_id
+        else:
+            return False
+
+
+    def _get_pulse_subset(self, start, end):
+        """
+        :param pulsetimes: N x 2 array of pulse starts and ends
+        :param start: start times
+        :param end: end times
+        :return:
+        """
+
+        pulse_starts = self._pulsetimes[:, 0]
+        i_st = np.searchsorted(pulse_starts, start)
+        if end > 0:
+            i_nd = np.searchsorted(pulse_starts, end)
+        else:
+            i_nd = None  # this returns all values including the value at the -1 position.
+        return self._pulsetimes[i_st:i_nd, :]
+
+
+
+

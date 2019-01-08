@@ -2,6 +2,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
@@ -19,8 +20,10 @@ LISTWIDTH = 125
 
 class MainWindow(QMainWindow):
     sessions_opened = pyqtSignal(list)
+    units_selected = pyqtSignal(list)
+    update_unit_list = pyqtSignal(dict)
 
-    def __init__(self, session_model_type, SessionViewType, windowname=''):
+    def __init__(self, session_model_type, SessionViewType, windowname='', to_open=[]):
         """
         Makes window to display unit and session widgets. Both view and models are customized to match
         different data found in different sessions using the two parameters.
@@ -29,29 +32,95 @@ class MainWindow(QMainWindow):
         :param session_view_type: Session view QWidget class (ie OdorSessionWidget, PatterSessionWidget)
         """
         super(MainWindow, self).__init__()
-        menu = self.menuBar()
-        # menu.setNativeMenuBar(False)
+        self._SessionModelType = session_model_type
         self.move(30, 30)
-        self.mainwidget = MainWidgetEphys(self, session_model_type, SessionViewType)
-        self.unit_sub_dock = QDockWidget('Subset Editor', self)
-        self.unit_subset_widget = UnitSubsetWidget()
-        self.unit_sub_dock.setWidget(self.unit_subset_widget)
-        self.unit_sub_dock.hide()
-        self.unit_sub_dock.setFeatures(QDockWidget.DockWidgetClosable)
-        self.mainwidget.unit_list_widget.addtosubset.connect(self.unit_subset_widget.list.addKeyEvent)
-        self.unit_subset_widget.list.selection_changed_list.connect(
-            self.mainwidget.unit_list_widget.select_external
-        )
+        menu = self.menuBar()
+        mainwidget = QWidget(self)
+        mainwidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        mainwidget.setBaseSize(mainwidget.sizeHint())
+
+        layout = QHBoxLayout(mainwidget)
+        selector_layout = QVBoxLayout()
+        layout.addLayout(selector_layout)
+
+        unit_list_widget = UnitListWidget(self)
+        self.update_unit_list.connect(unit_list_widget.update_list)
+        unit_list_widget.setSelectionMode(QListWidget.ExtendedSelection)
+        unit_list_widget.itemSelectionChanged.connect(self.unit_selection_changed)
+        unit_list_widget.stability.connect(self.show_stability_window)
+        self.unit_list_widget = unit_list_widget
+        session_selector = self._make_session_selector()
+        self.session_selector = session_selector
+
+        unit_filter_layout = QHBoxLayout()
+        unit_filter_layout.setSpacing(0)
+        unit_filter_label = QLabel('Min. unit rating: ')
+        unit_filter_spinbox = QSpinBox(self)
+        unit_filter_spinbox.setMaximum(5)
+        unit_filter_spinbox.setValue(3)
+        unit_filter_spinbox.valueChanged.connect(self.update_units)
+        self.unit_filter_spinbox = unit_filter_spinbox
+        unit_filter_layout.addWidget(unit_filter_label)
+        unit_filter_layout.addWidget(unit_filter_spinbox, )
+
+        selector_layout.addWidget(QLabel('Sessions:'))
+        selector_layout.addWidget(session_selector)
+        selector_layout.addWidget(QLabel('Units:'))
+        selector_layout.addWidget(unit_list_widget)
+        selector_layout.addLayout(unit_filter_layout)
+
+        self.session_widget = SessionViewType(self)
+        self.units_selected.connect(self.session_widget.update_units)
+
+        data_layout = QVBoxLayout()
+        data_layout.addWidget(self.session_widget)
+        self.unit_widget = UnitTabWidget(self)
+        self.units_selected.connect(self.unit_widget.update_unit)
+        data_layout.addWidget(self.unit_widget)
+        layout.addLayout(data_layout)
+
+
+
+        self.unit_sub_dock, self.unit_subset_widget = self._make_subset_dock()
+        self.unit_subset_widget.list.selection_changed_list.connect(unit_list_widget.select_external)
+        unit_list_widget.addtosubset.connect(self.unit_subset_widget.list.addKeyEvent)
 
         self.addDockWidget(Qt.RightDockWidgetArea, self.unit_sub_dock)
         self.make_menu(menu)
 
         sbar = self.statusBar()
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.sessions_opened.connect(self.mainwidget.load_files)
-        self.setCentralWidget(self.mainwidget)
+        self.sessions_opened.connect(self.load_files)
+        self.setCentralWidget(mainwidget)
         self.setWindowTitle(windowname)
         self.resize(1400, 900)
+
+        self.session_models = {}
+        self.unit_models = {}
+        self.selected_session_models = []
+        self.selected_session_units = {}
+
+        if to_open:
+            self.load_files(to_open)
+
+
+    def _make_session_selector(self):
+        session_selector = QListWidget(self)
+        session_selector.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        session_selector.setMaximumHeight(150)  # todo: set size based on width of rows not pixels
+        session_selector.itemSelectionChanged.connect(self.session_selection_changed)
+        session_selector.setSelectionMode(QListWidget.ExtendedSelection)
+        session_selector.setMaximumWidth(LISTWIDTH)
+        return session_selector
+
+    def _make_subset_dock(self):
+        unit_sub_dock = QDockWidget('Subset Editor', self)
+        unit_subset_widget = UnitSubsetWidget(unit_sub_dock)
+        unit_sub_dock.setWidget(unit_subset_widget)
+        unit_sub_dock.hide()
+        unit_sub_dock.setFeatures(QDockWidget.DockWidgetClosable)
+        return unit_sub_dock, unit_subset_widget
+
 
     def make_menu(self, menu):
         """makes menu items"""
@@ -73,8 +142,6 @@ class MainWindow(QMainWindow):
         fullscreen_Action.setStatusTip("Toggle full screen.")
         fullscreen_Action.setShortcut("Ctrl+E")
         filemenu.addAction(fullscreen_Action)
-
-
 
         toolmenu = menu.addMenu('Subset')
         act = self.unit_sub_dock.toggleViewAction()  # type: QAction
@@ -109,68 +176,40 @@ class MainWindow(QMainWindow):
         else:
             self.showMaximized()
 
+    @pyqtSlot(QListWidgetItem)
+    def show_stability_window(self, item):
+        unit = self.selected_session_units[item.text()]
+        stability_dialog = StabilityWidget(self, unit)
+        stability_dialog.show()
 
-class MainWidgetEphys(QWidget):
-    units_selected = pyqtSignal(list)
-    update_unit_list = pyqtSignal(dict)
+    @pyqtSlot()
+    def session_selection_changed(self):
+        selected_items = self.session_selector.selectedItems()
+        self.selected_session_models = [self.session_models[x.text()] for x in selected_items]
+        self.update_units(self.unit_filter_spinbox.value())
 
-    def __init__(self, parent, session_model_type: Session, SessionViewType):
-        super(MainWidgetEphys, self).__init__(parent)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._SessionModelType = session_model_type
-        self.session_models = {}
-        self.unit_models = {}  # container for all units in opened sessions. cache these for quick, hashed access
-        self.selected_session_models = []
-        self.selected_session_units = {}  # subset of only units in selected sessions
-        self.setBaseSize(self.sizeHint())
+    @pyqtSlot(list)
 
-        main_layout = QHBoxLayout()
-        selector_layout = QVBoxLayout()
-        main_layout.addLayout(selector_layout)
 
-        self.unit_list_widget = UnitListWidget(self)
-        self.update_unit_list.connect(self.unit_list_widget.update_list)
-        self.unit_list_widget.setSelectionMode(QListWidget.ExtendedSelection)
-        self.unit_list_widget.itemSelectionChanged.connect(self.unit_selection_changed)
+    @pyqtSlot(int)
+    def update_units(self, filt):
+        self.selected_session_units.clear()
+        for s in self.selected_session_models:
+            for u in s.units_gte(filt):
+                self.selected_session_units[str(u)] = u
+        self.update_unit_list.emit(self.selected_session_units)
 
-        self.session_selector = QListWidget(self,)
-        self.session_selector.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.session_selector.setMaximumHeight(150)  #todo: set size based on width of rows not pixels
-        self.session_selector.itemSelectionChanged.connect(self.session_selection_changed)
-        self.session_selector.setSelectionMode(QListWidget.ExtendedSelection)
-        self.session_selector.setMaximumWidth(LISTWIDTH)
+    @pyqtSlot()
+    def unit_selection_changed(self):
+        selected_items = self.unit_list_widget.selectedItems()
+        selected_units = [self.selected_session_units[x.text()] for x in selected_items]
+        self.units_selected.emit(selected_units)
 
-        unit_filter_layout = QHBoxLayout()
-        unit_filter_layout.setSpacing(0)
-        unit_filter_label = QLabel('Min. unit rating: ')
-        self.unit_filter_spinbox = QSpinBox(self)
-        self.unit_filter_spinbox.setMaximum(5)
-        self.unit_filter_spinbox.setValue(3)
-        self.unit_filter_spinbox.valueChanged.connect(self.update_units)
-        unit_filter_layout.addWidget(unit_filter_label)
-        unit_filter_layout.addWidget(self.unit_filter_spinbox,)
-
-        selector_layout.addWidget(QLabel('Sessions:'))
-        selector_layout.addWidget(self.session_selector)
-        selector_layout.addWidget(QLabel('Units:'))
-        selector_layout.addWidget(self.unit_list_widget)
-        selector_layout.addLayout(unit_filter_layout)
-
-        self.session_widget = SessionViewType(self)
-        self.units_selected.connect(self.session_widget.update_units)
-
-        data_layout = QVBoxLayout()
-        data_layout.addWidget(self.session_widget)
-        self.unit_widget = UnitTabWidget(self)
-        self.units_selected.connect(self.unit_widget.update_unit)
-        data_layout.addWidget(self.unit_widget)
-        main_layout.addLayout(data_layout)
-        self.setLayout(main_layout)
 
     @pyqtSlot(list)
     def load_files(self, filepaths):
         errors = 0
-        self.parent().setStatusTip('Opening {} files...'.format(len(filepaths)))
+        self.setStatusTip('Opening {} files...'.format(len(filepaths)))
         for f in filepaths:
             if os.path.splitext(f)[-1].lower() == '.json':
                 sessions = load_units_json(f)
@@ -194,35 +233,16 @@ class MainWidgetEphys(QWidget):
                     print("File cannot be opened: {}.\n {}".format(f, e))
                     errors += 1
         if errors:
-            self.parent().setStatusTip(
+            self.setStatusTip(
                 '{} of {} files could not be opened due to errors. Check log.'.format(errors, len(filepaths))
             )
         else:
-            self.parent().setStatusTip('Complete.')
-
-    @pyqtSlot()
-    def session_selection_changed(self):
-        selected_items = self.session_selector.selectedItems()
-        self.selected_session_models = [self.session_models[x.text()] for x in selected_items]
-        self.update_units(self.unit_filter_spinbox.value())
-
-    @pyqtSlot(int)
-    def update_units(self, filt):
-        self.selected_session_units.clear()
-        for s in self.selected_session_models:
-            for u in s.units_gte(filt):
-                self.selected_session_units[str(u)] = u
-        self.update_unit_list.emit(self.selected_session_units)
-
-    @pyqtSlot()
-    def unit_selection_changed(self):
-        selected_items = self.unit_list_widget.selectedItems()
-        selected_units = [self.selected_session_units[x.text()] for x in selected_items]
-        self.units_selected.emit(selected_units)
+            self.setStatusTip('Complete.')
 
 
 class UnitListWidget(QListWidget):
     addtosubset = pyqtSignal(list)
+    stability = pyqtSignal(QListWidgetItem)
 
     def __init__(self, parent):
         self.unit_models = []
@@ -233,6 +253,8 @@ class UnitListWidget(QListWidget):
         self.setDragDropMode(QListWidget.DragOnly)
         self.setStatusTip("Press 's' to add unit to subset")
         self.itemActivated.connect(self._itemActivated)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._context)
 
     @pyqtSlot(dict)
     def update_list(self, selected_units: dict):
@@ -258,6 +280,23 @@ class UnitListWidget(QListWidget):
     @pyqtSlot(QListWidgetItem)
     def _itemActivated(self, item):
         self.addtosubset.emit([item])
+
+    @pyqtSlot(QPoint)
+    def _context(self,pos):
+        item = self.currentItem()
+        if item:
+            self._currentitem = item
+            pos = self.mapToGlobal(pos)
+
+            menu = QMenu()
+            menu.addAction("Stability", self._stability)
+            menu.exec(pos)
+
+    @pyqtSlot()
+    def _stability(self):
+        item = self.currentItem()
+        print(item)
+        self.stability.emit(item)
 
 
 class UnitSubsetWidget(QWidget):
@@ -287,7 +326,7 @@ class UnitSubsetWidget(QWidget):
             if not filename:
                 return
             p = self.parent().parent() #type: MainWindow
-            all_units = p.mainwidget.unit_models
+            all_units = p.unit_models
             units_to_save = []
             n_units = self.list.count()
 
@@ -459,8 +498,14 @@ class PsthViewWidget(QWidget):
         super(PsthViewWidget, self).__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QHBoxLayout(self)
+        plt_layout = QVBoxLayout()
+
         self.plot = _PlotCanvas(self)
-        layout.addWidget(self.plot)
+        self.toolbar = NavToolbar(self.plot, self)
+        plt_layout.addWidget(self.toolbar)
+        plt_layout.addWidget(self.plot)
+
+        layout.addLayout(plt_layout)
 
         controls_layout = QVBoxLayout()
         pre_pad_label = QLabel('Pre plot (ms)')
@@ -516,7 +561,7 @@ class PsthViewWidget(QWidget):
 
     @pyqtSlot(list)
     @abstractmethod
-    def update_unit_plots(self, units):
+    def update_unit_plots(self, units, ):
         raise NotImplementedError('This method needs to be overwritten with logic to plot psths.')
         # self.plot.clr()
         # self._current_units = units
@@ -538,8 +583,9 @@ class _PlotCanvas(FigureCanvas):
         self.axis = fig.add_subplot(111)  # type: Axes
         self.setParent(parent)
 
-        FigureCanvas.setSizePolicy(self, QSizePolicy.Expanding, QSizePolicy.Expanding)
-        FigureCanvas.updateGeometry(self)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.updateGeometry()
+
 
     def clr(self):
         self.axis.cla()
@@ -604,3 +650,10 @@ class RasterViewWidget(QWidget):
     @abstractmethod
     def update_unit_plots(self, units):
         raise NotImplementedError('This method needs to be overwritten with logic to plot psths.')
+
+
+class StabilityWidget(QWidget):
+    def __init__(self, parent, unit=None):
+        super(StabilityWidget, self).__init__(parent, )
+        self.setWindowFlags(Qt.Window)
+        self.setFixedSize(300,400)

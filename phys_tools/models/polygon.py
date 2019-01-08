@@ -1,20 +1,23 @@
 from .base import *
 from ..utils import meta_loaders
 import numpy as np
+from typing import Tuple
+from collections import defaultdict
 
 
 SPOT_FIELD_NAME = 'spots'
 SPOTSIZE_FIELD_NAME = 'spotsizes'
 INTENSITY_FIELD_NAME = 'LaserIntensity_MWmm2'  # assuming homogenous intensity for all spots.
+HALFTONE_FIELD_NAME = 'intensities'
+SPOT_TIMES_FIELD_NAME = 'timing'
 
 
 class PatternUnit(Unit):
     """Unit from PatternSession"""
 
-    def __init__(self, unit_id, spiketimes, rating, session):
+    def __init__(self, unit_id, spiketimes, rating, session: 'PatternSession'):
         super(PatternUnit, self).__init__(unit_id, spiketimes, rating, session)
-
-        # TODO: make some good plotting functions.
+        self.session = session  # for type hinting.
 
     def plot_spots(self, pre_ms, post_ms, binsize_ms, sequences=None, axis=None, label='', color=None,
                    alpha=.8, linewidth=2, linestyle='-', convolve='gaussian') -> plt.Axes:
@@ -40,7 +43,7 @@ class PatternUnit(Unit):
         ys = []
 
         if axis is None:
-            axis = plt.axes()  #type: Axes
+            axis = plt.axes()  # type: Axes
 
         if not sequences:
             sequences = self.session.sequence_dict.keys()
@@ -48,8 +51,8 @@ class PatternUnit(Unit):
             times = self.session.sequence_dict[seq]
             if len(seq) == 1 and len(seq.frames) == 1:
                 spot = seq.frames[0].spots[0]
-                p_x = spot.x
-                p_y = spot.y - 3  #TODO THIS IS A STUPID HACK TO CORRECT OFFSET!!!!!!
+                p_x = spot.x - self.session.extents['x'][0]
+                p_y = spot.y - self.session.extents['y'][0]
                 x, psth = self.get_psth_times(times, pre_ms, post_ms, binsize_ms, convolve=convolve)
                 o_y = -offset_y * p_y
                 o_x = offset_x * p_x
@@ -78,6 +81,10 @@ class PatternSession(Session):
         self.sequences = []
         self._intensities = set()
         self._coordinates = set()
+        self._extents = None
+        self._spots_by_coord = None
+        self._seqs_by_spot = None
+        self._seqs_by_seq = None
         super(PatternSession, self).__init__(*args, **kwargs)
         with tb.open_file(self.paths['meta'], 'r') as f:
             self.inhales, self.exhales = meta_loaders.load_sniff_events(f)
@@ -93,52 +100,71 @@ class PatternSession(Session):
         n_trs = len(trials)
         pulse_starts = laser_events[:, 0]
         sequence_dict = {}
+        protocol_name = meta_loaders._get_voyeur_protocol_name(meta_file)
+
+        if protocol_name == 'patternstim_2AFC_ephys':
+            start_frame = 1  # these recordings have a blank start frame.
+        else:
+            start_frame = 0
 
         for i in range(n_trs - 1):
             st, tr = trials[i]
-            spots_str = tr[SPOT_FIELD_NAME].decode()  # spots are stored as a list of x,y coordinates (ie [[2,3], [5,3]])
-            spot_size_str = tr[SPOTSIZE_FIELD_NAME].decode()  # decode transforms bytes to str
-            if spots_str:
-                laser_spots = meta_loaders.poly_spot_to_list(spots_str)
+            spot_coord_str = tr[SPOT_FIELD_NAME].decode()  # spots are stored as a list of x,y coordinates (ie [[2,3], [5,3]])
+            if spot_coord_str:
+                spot_size_str = tr[SPOTSIZE_FIELD_NAME].decode()  # decode transforms bytes to str
+                spot_times = tr[SPOT_TIMES_FIELD_NAME].decode()
+                spot_halftone_intensity_str = tr[HALFTONE_FIELD_NAME].decode()
+                spot_halftone_intensity = meta_loaders.poly_spot_to_list(spot_halftone_intensity_str)
+                spot_coordinates = meta_loaders.poly_spot_to_list(spot_coord_str)
+                spot_times = meta_loaders.poly_spot_to_list(spot_times)
                 spot_sizes = meta_loaders.poly_spot_to_list(spot_size_str)
+                spot_size_dict = {}
+                spot_halftone_intensity_dict = {}
+                for coord, spotsize, spot_i in zip(spot_coordinates, spot_sizes, spot_halftone_intensity):
+                    coord = tuple(coord)  # hashable
+                    spot_size_dict[coord] = spotsize
+                    spot_halftone_intensity_dict[coord] = spot_i
+                frame_spots, frame_times = _make_sparse_frame_list(spot_coordinates, spot_times)
                 try:
-                    spot_intensity = tr[INTENSITY_FIELD_NAME]  # type: float
+                    laser_intensity = tr[INTENSITY_FIELD_NAME]  # type: float
                 except ValueError:  # very first recordings don't have this field, and were recorded with this power.
-                    spot_intensity = 187.
+                    print('Warning, no intensity field found, using default of 187.')
+                    laser_intensity = 187.
                 nd = allstarts[i + 1]
                 pulse_idxes = np.where((pulse_starts >= st) & (pulse_starts < nd))[0]
                 numpulses = len(pulse_idxes)
                 sequence_frames = list()
                 sequence_times = list()
-                if numpulses - 2 == len(laser_spots):
-                    # assert numpulses - 2 == len(laser_spots)
-                    assert meta_loaders.find_list_depth(laser_spots) < 4
-                    # minus 2 for two blank frame pulses, one before and one after the stimulus spots.
+                if numpulses - start_frame == len(frame_spots):
+                    # pulses include a start blank frame (sometimes), and end blank frame. These are inferred
+                    # and are not listed as spots.
+                    assert meta_loaders.find_list_depth(frame_spots) < 4
                     # even if we are presenting multiple spots in a frame (or pulse), they will be
                     # represented in a list. So we'll have a spot lists like: [[[2,3],[4,3]], [[2,1], [3,4]]],
                     # where we have 2 frames each with 2 spots, but the length of laser_spots is 2.
-                    for j in range(1, numpulses - 1):  # were going to ignore the first and last stim spots (see above).
+                    for j in range(start_frame, numpulses - 1):   # skip the blank first frame if it's there.
+                        # we're going to ignore the first and last stim spots (see above).
                         i_p = pulse_idxes[j]
-                        i_frame = j - 1  # the spots start at index 0
+                        i_frame = j - start_frame  # the spots start at index 0
                         t_frame = pulse_starts[i_p]
-                        spots_frame = laser_spots[i_frame]
-                        spot_size = spot_sizes[i_frame]
-                        depth = meta_loaders.find_list_depth(spots_frame)
-                        if depth == 1:  # only one spot in frame ([[3,3], [4,4]])
-                            sf = Spot(spots_frame, spot_size, spot_intensity)  # making tuple because needs to be hashable.
-                            self.unique_spots.add(sf)
-                            # spots are represented as [y, x]
-                            frame = Frame((sf,))
-                        elif depth == 2:
-                            spots_frame.sort()  # sort so that we guarantee consistent ordering of spot lists with same spots
-                            sfs = tuple([Spot(x, spot_size, spot_intensity) for x in spots_frame])  # make everything tupled.
-                            self.unique_spots.add(*sfs)
-                            frame = Frame(sfs)
-                        else:
-                            raise ValueError('problem with spot list depth.')
+                        frame_coordinates = frame_spots[i_frame]
+                        frame_coordinates.sort()  # sort so that we guarantee consistent ordering of spot lists with same spots
+                        sfs = []
+                        for coords in frame_coordinates:
+                            coords = tuple(coords)
+                            spot_halftone = spot_halftone_intensity_dict[tuple(coords)] / 255.
+                            spot_intensity = laser_intensity * spot_halftone
+                            sz = spot_size_dict[coords]
+                            spt = Spot(coords, sz, spot_intensity)
+                            self.unique_spots.add(spt)
+                            sfs.append(spt)
+                        sfs = tuple(sfs)
+                        frame = Frame(sfs)
                         sequence_frames.append(frame)
                         sequence_times.append(t_frame)
-                    sequence = FrameSequence(tuple(sequence_frames), tuple(sequence_times))  #TODO: utils an put frametimes relative in this.
+                    blank_pulse = pulse_starts[pulse_idxes[j + 1]]
+                    sequence_times.append(blank_pulse)
+                    sequence = FrameSequence(tuple(sequence_frames), tuple(sequence_times), tuple(frame_times))
                     sequence_start_time = sequence_times[0]
                     if sequence in sequence_dict.keys():
                         sequence_dict[sequence].append(sequence_start_time)
@@ -147,7 +173,7 @@ class PatternSession(Session):
                     self.sequences.append(sequence)
                 else:
                     print('warning {} frames found in trial {} and {} pulses found. Discarding trial.'.format(
-                        len(laser_spots), tr['trialNumber'], numpulses
+                        len(frame_spots), tr['trialNumber'], numpulses
                     ))
         self.sequence_dict = sequence_dict
 
@@ -165,6 +191,17 @@ class PatternSession(Session):
                 self._coordinates.add((s.x, s.y))
         return self._coordinates
 
+    @property
+    def extents(self):
+        if self._extents is None:
+            xs = [x[0] for x in self.unique_coordinates]
+            ys = [x[1] for x in self.unique_coordinates]
+            self._extents = {
+                'x': (min(xs), max(xs)),
+                'y': (min(ys), max(ys))
+            }
+        return self._extents
+
     def filter_spots(self, coordinate=None, intensity=None):
         """
         Finds frame sequences where the coordinate and intensities specified are matched
@@ -173,33 +210,60 @@ class PatternSession(Session):
         :param intensity: 
         :return: 
         """
-        coordinate_set = set()
-        intensity_set = set()
+
         sequences = self.sequence_dict.keys()
 
-        if coordinate is None:
-            for f in sequences:
-                coordinate_set.add(f)
+        if coordinate is None:  # if none, all sequences match the null
+            coordinate_set = set(sequences)
         else:
+            coordinate_set = set()
             for f in sequences:  #type: FrameSequence
-                if f.coordinates[0][0] == coordinate:
+                if coordinate in [j for i in f.coordinates for j in i]:  # recursively look through all frame coords
                     coordinate_set.add(f)
 
-        if intensity is None:
-            for f in sequences:
-                intensity_set.add(f)
+        if intensity is None:  # if none, all sequences match the null
+            intensity_set = set(sequences)
         else:
+            intensity_set = set()
             for f in sequences:  # type: FrameSequence
                 if f.intensities[0][0] == intensity:
                     intensity_set.add(f)
         return intensity_set & coordinate_set
+
+    @property
+    def spots_by_coordinate(self):
+        if self._spots_by_coord is None:
+            by_coord = {}
+            for spot in self.unique_spots:
+                by_coord[(spot.x, spot.y)] = spot
+            self._spots_by_coord = by_coord
+        return self._spots_by_coord
+
+    @property
+    def seqs_by_spot(self):
+        if self._seqs_by_spot is None:
+            seqs = {}
+            for spot in self.unique_spots:
+                sptlist = [seq for seq in self.sequence_dict.keys() if spot in seq.unique_spots]
+                seqs[spot] = sptlist
+            self._seqs_by_spot = seqs
+        return self._seqs_by_spot
+
+    @property
+    def seqs_by_seq(self):
+        if self._seqs_by_seq is None:
+            seqs = defaultdict(list)
+            for seq in self.sequences:
+                seqs[seq].append(seq)
+            self._seqs_by_seq = seqs
+        return self._seqs_by_seq
 
 
 class FrameSequence:
     """
     Sequence of Frames. Attributes: frames, frametimes, frametimes_relative.
     """
-    def __init__(self, frames: tuple, frametimes: tuple, frametimes_relative=None):
+    def __init__(self, frames: Tuple['Frame'], frametimes: Tuple[int], frametimes_relative: Tuple[int]):
         """
         Sequence of frames.
 
@@ -209,18 +273,21 @@ class FrameSequence:
         inhalation onset. This is used to determine whether the sequence is unique or an instance of an
         existing frame.
         """
-        #TODO: need to allow for input of relative (or sniff relative) times, probably from Voyeur data.
-        if not len(frames) == len(frametimes):
-            raise ValueError('number of frames must be consistent with number of frametimes')
+
+        if not len(frames) == len(frametimes) - 1:  # 1 extra frametime encoding the off time.
+            raise ValueError('Number of frames must be consistent with number of frametimes')
         if not type(frames) == tuple == type(frametimes):
-            raise ValueError('must use tuples (hashablility)')
+            raise ValueError('Must use tuples (hashablility)')
+        if frametimes_relative is not None and len(frametimes) != len(frametimes_relative):
+            raise ValueError('Number of frames and relative frametimes not consistent.')
         assert all([type(x) == Frame for x in frames])
         # assert all([type(x) == int for x in frametimes])
-        self.frames = frames  # type: list[Frame]
-        self.frametimes = frametimes
+        self.frames = frames
+        self.frametimes = frametimes  # absolute frametimes relative to recording time.
         self.nframes = len(frames)
         self.frametimes_relative = frametimes_relative  # this is for
         self.start = frametimes[0]
+        self._unique_spots = None  # property
 
     @property
     def intensities(self):
@@ -230,12 +297,22 @@ class FrameSequence:
     def coordinates(self):
         return [x.coordinates for x in self.frames]
 
+    @property
+    def unique_spots(self):
+        if self._unique_spots is None:
+            self._unique_spots = set()
+            for fr in self.frames:
+                for spt in fr.spots:
+                    self._unique_spots.add(spt)
+        return self._unique_spots
+
     def __hash__(self):
-        # we're using the relative frametimes here because this is
+        # we're using the relative frametimes here. obviously absolute frametimes will be different between
+        # frame presentations.
         return hash((self.frames, self.frametimes_relative))
 
     def __eq__(self, other):
-        return len(self.frames) == len(other.frames) and self.frametimes_relative == other.frametimes_relative
+        return self.frametimes_relative == other.frametimes_relative and self.frames == other.frames
 
     def __contains__(self, item):
         return self.frames.__contains__(item)
@@ -257,20 +334,14 @@ class Frame:
     """
     Frames are sparsely defined boolean matrices that were projected onto the brain using a DMD.
     """
-    def __init__(self, spots: tuple):
+    def __init__(self, spots: Tuple['Spot']):
         """
-        Frames are made up of spots. For now, spots are simply tuples expressing cartesian coordinates
-        of the spot (x, y).
-
-        A frame can contain as many spots as needed, again as a tuple.
-        ie ((x1, y1), (x2, y2), ..., (xN, yN))
-
-        (tuples is required because they are hashable and immutable)
-
-        :param spots: tuple of spot coordinate tuples.
+        Frames are made up of Spots. A frame can contain as many spots as needed.
+        
+        :param spots: tuple containing Spot objects.
         """
         assert type(spots) == tuple
-        self.spots = spots  # type: list[Spot]
+        self.spots = spots
         # todo store matrix dimensions for use making compact representation.
 
     @property
@@ -304,11 +375,11 @@ class Frame:
 class Spot:
     """basic unit of pattern stim ephys frame,"""
 
-    def __init__(self, coordinates: tuple, size: float, intensity: float):
+    def __init__(self, coordinates: Tuple[int], size: float, intensity: float):
         """
-        :param coordinates: tuple of
-        :param size:
-        :param intensity: laser intensity in mW mm-2. Taken from LaserIntensity_1 row.
+        :param coordinates: tuple of (y, x) - REVERSE CARTESIAN.
+        :param size: size of spot.
+        :param intensity: laser intensity in mW mm-2.
         """
         self.y, self.x = coordinates  # note that this is flipped from sanity.
         # smaller y is anterior
@@ -325,3 +396,44 @@ class Spot:
     def __eq__(self, other):
         return self.x == other.x and self.y == other.y and self.size == other.size and \
                self.intensity == other.intensity
+
+
+def _make_sparse_frame_list(spot_list, spot_timing):
+    """
+    Makes frame sequence representation out of spot + spot time lists. By EC.
+
+    Each frame is a list of spots that are active at a given time. 
+    The sequence is made up of a list of frames.
+
+    For example (+ is on, - is off):
+    spot1 (x1, y1):  +++++------
+    spot2 (x2, y2):  ---+++++---
+    
+    Would have a sequence: [[[x1,y1]], [[x1,y1], [x2, y2]], [[x2, x2]], []] 
+    
+    The last frame in the sequence is empty - no spots are on.
+
+    :param spot_list: [[x1,y1], [x2,y2]] 
+    :param spot_timing: [t1, t2]
+    :return:  frame sequence, frame times 
+    """
+
+    nspots = len(spot_list)
+    spot_timing = np.array(spot_timing)
+
+    frame_times = np.unique(spot_timing)
+
+    frame_array = np.zeros([nspots, len(frame_times)])
+    for i in range(len(frame_times)):
+        switch_time = frame_times[i]
+        spots_present = (switch_time >= spot_timing[:, 0]) * (switch_time < spot_timing[:, 1])
+        frame_array[:, i] = spots_present
+
+    frame_list = []
+    for i in range(len(frame_times)):
+        spots_present = frame_array[:, i]
+        spots_present = np.where(spots_present == True)[0]
+        spots_in_frame = [spot_list[x] for x in spots_present]
+        frame_list.append(spots_in_frame)
+    assert len(frame_list) == len(frame_times)
+    return frame_list, frame_times

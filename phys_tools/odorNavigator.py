@@ -4,6 +4,13 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 import os
+import sys
+import argparse
+
+parser = argparse.ArgumentParser(prog='patterNavigator')
+parser.add_argument(
+    '-f', '--filepaths', nargs='+', help='Specify filenames to open.', type=str,default=[]
+)
 
 
 class SystemTrayIcon(QSystemTrayIcon):
@@ -16,16 +23,15 @@ class SystemTrayIcon(QSystemTrayIcon):
 
 
 def main():
-    import sys
+    args = parser.parse_args()
+    filepaths = args.filepaths
     package_directory = os.path.dirname(os.path.abspath(__file__))
     iconpath = os.path.join(package_directory, "support/odorNavigator.icns")
     argv = sys.argv
     app = QApplication(argv)
     qApp.setWindowIcon(QIcon(iconpath))
-
-    w = main_views.MainWindow(OdorSession, odor_views.OdorSessionWidget, 'odorNavigator')
+    w = main_views.MainWindow(OdorSession, odor_views.OdorSessionWidget, 'odorNavigator', filepaths)
     w.show()
-
 
     sys.exit(app.exec_())
 

@@ -16,8 +16,9 @@ class OdorUnit(Unit):
     """
     Unit class for unit exposed to odor stimuli.
     """
-    def __init__(self, unit_id, spiketimes: np.ndarray, rating, session):
+    def __init__(self, unit_id, spiketimes: np.ndarray, rating, session: 'OdorSession'):
         super(OdorUnit, self).__init__(unit_id, spiketimes, rating, session)
+        self.session = session
 
     def get_odor_psth(self, odor, concentration, pre_ms, post_ms, binsize_ms, convolve=False):
         """
@@ -211,9 +212,9 @@ class OdorSession(Session):
             st, tr = trials[i_tr]
             odors_by_olfa = []
             for s in _odor_fields_valid:
-                odor = tr[s]
-                if odor:
-                    odors_by_olfa.append(odor.decode())  # make into string from binary.
+                odor = tr[s].decode()
+                if odor and not odor.startswith("Air"):
+                    odors_by_olfa.append(odor)  # make into string from binary.
             assert len(odors_by_olfa) < 2, 'multiple concentrations functionality is not included.'
             if len(odors_by_olfa):
                 odor = odors_by_olfa[0]
@@ -275,7 +276,9 @@ class OdorSession(Session):
         Returns a sorted array of unique concentrations presented for a specified odorant.
         """
 
-        return self.concentrations_by_odor[odor]
+        mask = self.stimuli["odors"] == odor
+        concs = self.stimuli["odorconcs"][mask]
+        return np.unique(concs)
 
     @property
     def concentrations_by_odor(self) -> dict:
@@ -339,4 +342,31 @@ class OdorSession(Session):
             axis = self.plot_sniffs(inhs, pre_ms, post_ms, axis=axis, color=color, alpha=alpha, linestyle=linestyle,
                              linewidth=linewidth)  # will create/return new plot if None is supplied
         return axis
+
+    def get_no_odor_sniffs(self, pad=30000, filter=None):
+        """
+        returns a tuple of arrays with times of inhalations and exhalations that do not occur within a final valve
+        open time.
+
+        :param pad: the
+        :return:
+        """
+
+        inh_times = self.inhales
+        exh_times = self.exhales
+        fv_ons = self.stimuli['fv_ons']
+        fv_offs = self.stimuli['fv_offs']
+
+        padded_offs = fv_offs + pad
+
+        out_of_sniff = np.ones(len(inh_times), dtype='bool')
+
+        for on, off in zip(fv_ons, padded_offs):
+            fails = (inh_times > on) & (inh_times < off)
+            out_of_sniff[fails] = False
+
+        return inh_times[out_of_sniff], exh_times[out_of_sniff]
+
+
+
 

@@ -5,7 +5,7 @@ import os
 from glob import glob
 
 
-def make_file_paths(dat_path, suffix='1'):
+def make_file_paths(dat_path, suffix='1', meta=None):
     """
     Returns tuple of default file paths for spyking circus files.
     :param dat_path:
@@ -17,18 +17,30 @@ def make_file_paths(dat_path, suffix='1'):
     sortdir = os.path.join(basedir, name)
     templates = os.path.join(sortdir, '{}.templates{}.hdf5'.format(name, suffix))
     result = os.path.join(sortdir, '{}.result{}.hdf5'.format(name, suffix))
-    meta = os.path.join(basedir, '{}_meta.h5'.format(name))
+    if meta is None:
+        meta = os.path.join(basedir, '{}_meta.h5'.format(name))
     for f in (templates, result, meta):
         if not os.path.exists(f):
             raise FileNotFoundError(f)
     return templates, result, meta
 
 
+def make_lfp_path(dat_path):
+    basedir, dat = os.path.split(dat_path)
+    name = os.path.splitext(dat)[0]
+    result = os.path.join(basedir, '{}_lfp.h5'.format(name))
+    if not os.path.exists(result):
+        result = None
+    return result
+
+
 def find_probe_file(dat_path):
     """ finds probe file in session folder. """
     prb_file = None
     basedir, dat = os.path.split(dat_path)
-    prb_files = glob(basedir+'/*.prb')
+
+    prb_files = glob(os.path.join(basedir, '*.prb'))
+
     if len(prb_files) == 1:
         prb_file = prb_files[0]
     elif len(prb_files) > 1:
@@ -91,7 +103,7 @@ def load_spiketimes_unstructured(template_fn, results_fn, tag_threshold=1.):
 
 def load_template_ratings(template_fn) -> np.array:
     """
-    Returns array of tags made by spyking circus matlab GUI.
+    Returns array of tags made by spyking circus matlahowb GUI.
     0 - unclassified
     1 - "E"
     2 - "D" MU
@@ -150,7 +162,7 @@ def load_probe_positions(probe_fn) -> np.array:
     coordinates.
 
     Dead channels (those not appearing in the probes channels list) are omitted from the array!!! As such, this array is
-    indexed to be equivalent to the template array loaded by the load_templates method!
+    indexed to be equivalent to the template array loaded by the get_waveform method!
 
     :param probe_fn: path to .prb file.
     :return: array of positions by channel.

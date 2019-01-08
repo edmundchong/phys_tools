@@ -1,7 +1,7 @@
 import numpy as np
 from numba import jit
 import os
-from scipy.signal import decimate
+from scipy.signal import decimate, butter, filtfilt
 import tables as tb
 import shutil
 from . import meta_handlers
@@ -13,6 +13,8 @@ from .open_ephys_helpers import loadContinuous
 from tqdm import tqdm
 import pickle
 import warnings
+from typing import Iterable, Dict
+from collections import defaultdict
 try:
     import matplotlib.pyplot as plt
 except RuntimeError:
@@ -114,7 +116,7 @@ def process_spikegl_recording(raw_fn_list: list,
     meta_dtypes = []
     for r, m in zip(raw_fns, meta_fns):
         total_size += os.path.getsize(r)
-        chs, fs, meta_dtype = _read_meta(m)
+        chs, fs, meta_dtype = _read_sgl_meta(m)
         meta_dtypes.append(meta_dtype)
         nchs.append(len(chs))
 
@@ -135,11 +137,12 @@ def process_spikegl_recording(raw_fn_list: list,
             separated_prefix = os.path.join(tmpdirname, '{}_{}'.format(save_prefix, i))
             separated_prefixes.append(separated_prefix)
             r_fn = raw_fns[i]
+            samps_per_ch_run = os.path.getsize(r_fn) / total_chs / file_dtype.itemsize  # for pltrig
             m_fn = meta_fns[i]
             if not r_fn[0] == m_fn[0]:
                 logging.warning('raw and meta filenames are not similar: raw: {}, meta: {}'.format(r_fn, m_fn))
             logging.info('Separating {} to channels...'.format(r_fn))
-            chs, fs, _ = _read_meta(m_fn)
+            chs, fs, _ = _read_sgl_meta(m_fn)
             for ch in neural_channel_numbers:
                 if ch not in chs:
                     raise ValueError('Neural channel {} is not found in sgl meta file.'.format(ch))
@@ -162,7 +165,7 @@ def process_spikegl_recording(raw_fn_list: list,
 
                 # if there's greater that 20% error in the number of PL trigs compared to what we expect,
                 # raise exception.
-                seconds_recorded = samps_per_ch / fs
+                seconds_recorded = samps_per_ch_run / fs
                 expected_pl_trigs = seconds_recorded * 60.  # this is for 60 Hz (US) powerline AC.
                 if np.abs(len(pl_trig_times) - expected_pl_trigs) > expected_pl_trigs * 0.2:
                     raise ValueError("PL trigs")
@@ -182,8 +185,8 @@ def process_spikegl_recording(raw_fn_list: list,
             _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
                       dtype=file_dtype, expectedrows=samps_per_ch)
 
-        make_meta(separated_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
-                  file_dtype, debug_plots)
+        make_meta_from_bins(separated_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
+                            file_dtype, debug_plots)
         logging.info('meta completed.')
 
         assert total_size == os.path.getsize(temp_dat_fn)
@@ -213,12 +216,13 @@ def process_oEphys_rec(open_ephys_recording_folder,
                        meta_event_dict: dict,
                        voyeur_paths: list,
                        pl_trig_ch: int,
-                       raw_prefixes=['100'],
+                       raw_prefixes=('100',),
                        debug_plots=True,
                        file_dtype='int16',
                        clean_on_exemption=True,
                        process_aux=True,
-                       process_neural=True
+                       process_neural=True,
+                       process_lfp=True
                        ):
     """
     Preprocessing script for electrophysiology data.
@@ -238,11 +242,13 @@ def process_oEphys_rec(open_ephys_recording_folder,
     :param neural_channel_numbers: openephys channels start at 1.
     :param meta_stream_dict: dictionary specifying streams: {name_string: channelnumber, ..}
     :param meta_event_dict: dictionary specifying streams: {name_string: channelnumber, ..}
-    :param voyeur_paths:
-    :param pl_trig_ch:
-    :param debug_plots:
-    :param file_dtype:
-    :param clean_on_exemption:
+    :param voyeur_paths: list of paths to voyeur files corresponding to this recording.
+    :param pl_trig_ch: What is the channel of PL trigger for 60Hz noise subtraction? Default None.
+    :param ebug_plots: plot during meta creation?
+    :param file_dtype: How is the data stored? (default: int16)
+    :param clean_on_exemption: Should we delete everything if the routine fails?
+    :param process_aux: Do you want to make a meta file?
+    :param process_neural: Do you want to extract spiketimes?
     :return:
     """
     file_dtype = np.dtype(file_dtype)
@@ -281,17 +287,18 @@ def process_oEphys_rec(open_ephys_recording_folder,
     separated_prefixes = []
     adc_prefixes = []  # ADC prefixes are needed because ADC channel start at 1 - same as neural...
 
-    for fnn in (dat_fn, lfp_fn):
-        if os.path.exists(fnn):
-            logging.error('Dat already exists: {}. Exiting'.format(dat_fn))
-            return
+    if process_neural:
+        for fnn in (dat_fn, lfp_fn):
+            if os.path.exists(fnn):
+                logging.error('Dat already exists: {}. Exiting'.format(dat_fn))
+                return
 
     bytes_per_sample = file_dtype.itemsize
     n_samples_by_ch = []  # list of the number of samples read into each neural channel.
     total_expected_dat_size = 0 # running value of the expected dat size after every run is appended.
+    os.mkdir(tmpdirname)
 
     try:
-        os.mkdir(tmpdirname)
         if process_neural:
             with open(temp_dat_fn, 'wb') as f:
                 pass
@@ -309,16 +316,12 @@ def process_oEphys_rec(open_ephys_recording_folder,
             raw_adc_fns = glob(os.path.join(raw_folder, "{}_ADC*.continuous".format(raw_prefix)))
             raw_neural_chs = [_get_number(p, 'CH') for p in raw_neural_fns]
             raw_aux_chs = [_get_number(p, 'AUX') for p in raw_aux_fns]  # not used currently. This would be gyroscope information.
-            raw_adc_chs = [_get_number(p, 'ADC') for p in raw_adc_fns]
+            raw_adc_chs_present = [_get_number(p, 'ADC') for p in raw_adc_fns]
+            raw_adc_chs = []
             if process_neural:
                 for ch in neural_channel_numbers:
                     if ch not in raw_neural_chs:
                         raise ValueError('Neural channel {} is not found).'.format(ch))
-                for m_chs in (meta_event_dict, meta_stream_dict):
-                    for k, v in m_chs.items():
-                        if v not in raw_adc_chs:
-                            raise ValueError('Channel {} specified as a meta channel "{}", but not found '
-                                             'in recording.'.format(v, k))
 
                 if pl_trig_ch and pl_trig_ch in raw_adc_chs:
                     logging.info('Running PL removal using AUX ch {}...'.format(pl_trig_ch))
@@ -371,19 +374,29 @@ def process_oEphys_rec(open_ephys_recording_folder,
                     logging.info('Complete.')
 
                 assert os.path.getsize(temp_dat_fn) == total_expected_dat_size
-
-                if i_run < 1:
-                    create_lfp_file = True
-                else:
-                    create_lfp_file = False
-                _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
-                          dtype=file_dtype, expectedrows=EXPECTED_LFP_ROWS)
-                # expected rows is hard-coded for a 30 minute recording @ 1kHz
+                logging.info('Renaming temp dat file...')
+                os.rename(temp_dat_fn, dat_fn)
+                if process_lfp:
+                    if i_run < 1:
+                        create_lfp_file = True
+                    else:
+                        create_lfp_file = False
+                    _make_lfp(separated_prefix, neural_channel_numbers, temp_lfp_fn, fs, create_lfp_file,
+                              dtype=file_dtype, expectedrows=EXPECTED_LFP_ROWS)
+                    # expected rows is hard-coded for a 30 minute recording @ 1kHz
+                    logging.info('Renaming LFP file...')
+                    os.rename(temp_lfp_fn, lfp_fn)
             if process_aux:
+                for m_chs in (meta_event_dict, meta_stream_dict):
+                    for k, v in m_chs.items():
+                        raw_adc_chs.append(int(v))
+                        if process_aux and v not in raw_adc_chs_present:
+                            raise ValueError('Channel {} specified as a meta channel "{}", but not found '
+                                             'in recording.'.format(v, k))
                 # todo: handle aux channels too and implement a way to get aux channels into the meta file.
                 logging.info('reading ADC channels')
-
-                for ch, raw_fn in zip(tqdm(raw_adc_chs, unit='chan', desc='Unpack ADC chans.'), raw_adc_fns):
+                for ch in tqdm(raw_adc_chs, unit='chan', desc='Unpack ADC chans.'):
+                    raw_fn = raw_adc_fns[raw_adc_chs_present.index(ch)]
                     save_fn = _gen_channel_fn(adc_prefix, ch)
                     logging.debug('saving ADC ch {} ({}) to "{}"'.format(ch, raw_fn, save_fn))
                     loaded = loadContinuous(raw_fn, dtype=file_dtype)
@@ -392,11 +405,6 @@ def process_oEphys_rec(open_ephys_recording_folder,
                         a.tofile(f)
                     if not fs:
                         fs = int(loaded['header']['sampleRate'])
-        if process_neural:
-            logging.info('Renaming temp dat and lfp files...')
-
-            os.rename(temp_dat_fn, dat_fn)
-            os.rename(temp_lfp_fn, lfp_fn)
 
     except Exception as e:
         logging.error('Failed during neural data handling. No resume is possible.')
@@ -411,8 +419,8 @@ def process_oEphys_rec(open_ephys_recording_folder,
 
     try:
         if process_aux:
-            make_meta(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
-                      file_dtype, debug_plots)
+            make_meta_from_bins(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
+                                file_dtype, debug_plots)
             logging.info('Meta file completed.')
             os.rename(temp_meta_fn, meta_fn)
         completed = True
@@ -425,7 +433,7 @@ def process_oEphys_rec(open_ephys_recording_folder,
             logging.info('Cleaning up temp files...')
             shutil.rmtree(tmpdirname)
         elif not clean_on_exemption:
-            # save some data for an entrypoint back into make_meta.
+            # save some data for an entrypoint back into make_meta_from_bins.
             d = os.getcwd()
             fp = os.path.join(d, '{}_resume.pickle'.format(dat_fn))
             logging.info('Saving resume pickle file to: {}'.format(fp))
@@ -434,6 +442,122 @@ def process_oEphys_rec(open_ephys_recording_folder,
                              fs, file_dtype, debug_plots, tmpdirname, save_prefix), f)
         LOGGER.removeHandler(log_file_handler)
         log_file_handler.close()
+
+
+def process_wavesurfer_rec(
+        wavesurfer_path, voyeurpaths: list, save_prefix, meta_stream_dict: dict, meta_event_dict: dict,
+        neural_channel_indices=(0,), debug_plots=True, process_aux=True, process_neural=True, neural_threshold=5.
+):
+    """
+    
+    :param axonpath: path to axon HDF5 file.
+    :param voyeur_paths: list of paths to voyeur files corresponding to this recording. 
+    :param save_prefix: 
+    :param meta_stream_dict: ie {'streamname': 0, 'streamname2': 1}
+    :param meta_event_dict: ie {'eventsname': 0, 'eventsname2': 1}
+    :param neural_channel_indices: indeces of neural channels (default: (0,)
+    :param debug_plots: plot during meta creation?
+    :param process_aux: Do you want to make a meta file?
+    :param process_neural: Do you want to extract spiketimes?
+    :param neural_threshold: threshold for spikes (in standard deviations from mean) (default: 5)
+    :return: 
+    """
+    log_fn = "{}_{}.log".format(save_prefix, datetime.now().isoformat())
+    log_file_handler = logging.FileHandler(log_fn)
+    log_file_handler.setFormatter(LOG_FORMATTER)
+    LOGGER.addHandler(log_file_handler)
+
+
+    stream_arrays = defaultdict(list)
+    event_arrays = defaultdict(list)
+
+    with tb.open_file(wavesurfer_path) as f:  # type: tb.File
+        nodename = None
+        for k in f.root._v_children.keys():
+            if k.startswith('sweep'):
+                nodename = "/{}/analogScans".format(k)
+        assert nodename is not None, "Can't find a scan node."
+        data_node = f.get_node(nodename)
+        all_data = data_node.read()
+        fs = f.get_node('/header/Acquisition/SampleRate')[0, 0]
+        logging.info('Data loaded from {}'.format(wavesurfer_path))
+    if process_neural:
+        for ch in neural_channel_indices:
+            savepath = "{}_spiketimes{}.csv".format(save_prefix, ch)
+            logging.info('Extracting spikes for ch {} to {}.'.format(ch, savepath))
+            spiketimes = _find_juxta_spikes(all_data[ch, :], fs, neural_threshold)
+            with open(savepath, 'w') as f_save:
+                spiketimes.tofile(f_save, ",")
+    if process_aux:
+        for k, v in meta_stream_dict.items():
+            stream_arrays[k].append(all_data[v, :])
+        for k, v in meta_event_dict.items():
+            event_arrays[k].append(all_data[v, :])
+
+        meta_save_path = "{}_meta.h5".format(save_prefix)
+        make_meta(stream_arrays, event_arrays, voyeurpaths, meta_save_path, fs, debug_plots)
+
+    logging.info("Complete!")
+    LOGGER.removeHandler(log_file_handler)
+    log_file_handler.close()
+
+
+def _find_juxta_spikes(neural_signal: np.ndarray, fs: float, threshold_sd=5., lowcut=300., highcut=3000., debug_plots=True) -> np.ndarray:
+    """
+    Filter and find threshold crossings. Threshold is expressed in terms of standard deviations from mean.
+    
+    :param neural_signal: array of neural recording 
+    :param fs: sample rate for filter building
+    :param threshold_sd: threshold for filter building (default 5)
+    :param lowcut: lowcut  for filter
+    :param highcut: highcut for filter.
+    :return: 
+    """
+    nyquist = fs / 2
+    lowcutW = lowcut/nyquist
+    highcutW = highcut/nyquist
+    b, a = butter(3, (lowcutW, highcutW), 'bandpass')
+    filtered = filtfilt(b, a, neural_signal)  # zero phase delay.
+    threshold = filtered.std() * threshold_sd
+    if debug_plots:
+        plt.plot(filtered[:int(fs)], label='signal')
+        plt.plot(plt.xlim(),[threshold] * 2, '--r', alpha=.7, label='threshold {:0.1f}'.format(threshold_sd))
+        plt.legend(loc='best')
+        plt.title('neural channel excerpt')
+        plt.show()
+    thresholded = filtered > threshold
+    crossings, = np.where(np.convolve([1,-1], thresholded, 'valid') == 1)
+
+    if debug_plots:
+        pad = int(fs/1000.)
+
+        amplitudes = np.zeros(len(crossings), dtype=filtered.dtype)
+        for i in range(len(crossings)):
+            c = crossings[i]
+            nd = int(c + pad+.5)
+            excerpt = filtered[c: nd]
+            amplitudes[i] = excerpt.max()
+        plt.plot(crossings / fs, amplitudes, '.', alpha=.5, markersize=1)
+        plt.ylim([0, None])
+        plt.plot(plt.xlim(), [threshold]*2, '--r', alpha=.7, label='threshold')
+        plt.ylabel('spike amplitude')
+        plt.xlabel('recording time (s)')
+        plt.legend(loc='best')
+        plt.title('spike amplitude over time')
+        plt.show()
+
+        x = np.linspace(-1, 1, pad * 2)
+        for i in range(0, len(crossings), 50):
+            c = crossings[i]
+            st = int(c - pad)
+            nd = int(c + pad)
+            plt.plot(x, filtered[st:nd], alpha=.3)
+        plt.title('waveforms')
+        plt.xlabel('time (ms)')
+        plt.show()
+
+    return crossings
+
 
 def resume(resume_file_path):
     """
@@ -450,11 +574,11 @@ def resume(resume_file_path):
     LOGGER.addHandler(log_file_handler)
     logging.info('Opened {}'.format(resume_file_path))
 
-    make_meta(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
-              file_dtype, debug_plots)
+    make_meta_from_bins(adc_prefixes, meta_stream_dict, meta_event_dict, voyeur_fns, temp_meta_fn, fs,
+                        file_dtype, debug_plots)
 
 
-def _read_meta(path):
+def _read_sgl_meta(path):
     """
     Reads SpikeGL meta file. Returns list of channel numbers in the order they are recorded and the sample rate of the
     acquisition system.[[
@@ -544,7 +668,7 @@ def _separate_channels(raw_fn, channels, prefix_str, overwrite=False, append=Fal
             for i, fn in enumerate(channel_fns):
                 with open(fn, 'ab') as f:
                     a[:, i].tofile(f)
-            # utils next block and repeat if it exists.
+            # load next block and repeat if it exists.
             a = np.fromfile(orig_file, dtype, samples_per_read)
             x = len(a)
 
@@ -698,14 +822,15 @@ def _make_lfp(raw_files_prefix: str, channels, lfp_filename, acquistion_frequenc
     logging.info('Complete.')
 
 
-def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_files, save_fn,
-              acquistion_frequency, dtype=np.int16, debug_plots=False):
+def make_meta_from_bins(raw_files_prefixes: Iterable, stream_channels: dict, event_channels: dict, voyeur_files: Iterable,
+                        save_fn: str, acquistion_frequency: float, dtype=np.int16, debug_plots=False):
     """
-
-    :param raw_files_prefixes:
-    :param stream_channels:
-    :param event_channels:
-    :param voyeur_files:
+    Load streams from binarys and call make_meta
+    
+    :param raw_files_prefixes: path prefix to binary files.
+    :param stream_channels: dictionary of {stream_names: channel_numbers}
+    :param event_channels: dictionary of {event_names: channel_numbers}
+    :param voyeur_files: iterable 
     :param save_fn: name of the meta h5 file to save.
     :param acquistion_frequency:
     :param dtype: dtype the raw files are saved in.
@@ -713,12 +838,46 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
     :return:
     """
     ch = 1  # in case we have no specified channels we'll read from channel 1...
+    logging.info("Loading stream and event arrays from dats.".format(save_fn))
+    streams = defaultdict(list)
+    events = defaultdict(list)
+    for name, ch in stream_channels.items():
+        for prefix in raw_files_prefixes:
+            fn = _gen_channel_fn(prefix, ch)
+            a = np.fromfile(fn, dtype)
+            streams[name].append(a)
+    for name, ch in event_channels.items():
+        for prefix in raw_files_prefixes:
+            fn = _gen_channel_fn(prefix, ch)
+            a = np.fromfile(fn, dtype)
+            events[name].append(a)
+
+    return make_meta(streams, events, voyeur_files, save_fn, acquistion_frequency, debug_plots)
+
+
+def make_meta(streams: Dict, events: Dict, voyeur_files: Iterable, save_fn: str, acquistion_frequency: float,
+              debug_plots=False):
+    """
+    Generalized meta file maker that takes pre-loaded streams and arrays. Data arrays should be a list of arrays: 
+    ie [stream_run_1, stream_run_2, ...].
+    
+    :param streams: dictionary of arrays to save as streams. Arrays will be saved to the Streams node of meta file.
+    :param events: dictionary of arrays from which to extract events. 
+    :param voyeur_files: iterable containg
+    :param save_fn: 
+    :param acquisition_frequency: 
+    :param debug_plots: 
+    :return: 
+    """
+
+    n_runs = 0
+    run_sizes = []
     logging.info("Making meta HDF5 file {}".format(save_fn))
     with tb.open_file(save_fn, 'w') as f:
         assert isinstance(f, tb.File)
         f.set_node_attr('/', 'acquisition_frequency_hz', acquistion_frequency)
         logging.debug("copying Voyeur beh files:")
-        f.create_group('/', 'Voyeur')
+        v_grp = f.create_group('/', 'Voyeur')
         for fn in voyeur_files:
             _, filename = os.path.split(fn)
             v_name, _ = os.path.splitext(filename)
@@ -726,29 +885,24 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
                 logging.debug("{}".format(fn))
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=tb.NaturalNameWarning)
-                    run.copy_node('/', f.root.Voyeur, v_name, recursive=True)
-
-        for name, ch in stream_channels.items():
+                    run_grp = run.copy_node('/', v_grp, v_name)
+                    run.copy_node('/Trials', run_grp, 'Trials')
+        for name, stream_chunks in streams.items():
+            if not n_runs:
+                n_runs = len(stream_chunks)
+                run_sizes = [len(x) for x in stream_chunks]
             logging.info('Writing stream {}'.format(name))
-            stream_chunks = []
-            for prefix in raw_files_prefixes:
-                fn = _gen_channel_fn(prefix, ch)
-                a = np.fromfile(fn, dtype)
-                stream_chunks.append(a)
             stream = np.concatenate(stream_chunks)
             if debug_plots:
                 plt.plot(stream[:STREAM_PLOT_NSAMP])
                 plt.title(name)
                 plt.show()
             f.create_carray('/Streams', name, createparents=True, obj=stream, filters=STREAM_FILTER)
-        f.create_group('/', 'Events')
-        for name, ch in event_channels.items():
+        for name, stream_chunks in events.items():
+            if not n_runs:
+                n_runs = len(stream_chunks)
+                run_sizes = [len(x) for x in stream_chunks]
             logging.info('Making events for {}.'.format(name))
-            stream_chunks = []
-            for prefix in raw_files_prefixes:
-                fn = _gen_channel_fn(prefix, ch)
-                a = np.fromfile(fn, dtype)
-                stream_chunks.append(a)
             stream = np.concatenate(stream_chunks)
             if debug_plots:
                 plt.plot(stream[:EVENT_PLOT_NSAMP])
@@ -756,21 +910,13 @@ def make_meta(raw_files_prefixes: list, stream_channels, event_channels, voyeur_
                 plt.show()
             events = meta_handlers.processors[name](stream, acquistion_frequency)
             f.create_carray('/Events', name, createparents=True, obj=events)
-
-        run_ends = np.zeros(len(raw_files_prefixes), dtype=np.uint64)
-        end = 0
-        for i, prefix in enumerate(raw_files_prefixes):
-            #TODO: if there are no event/stream channels, this will not work.
-            sz = os.path.getsize(_gen_channel_fn(prefix, ch))
-            end = end + sz
-            run_ends[i] = end/dtype.itemsize
-
-        f.create_carray('/Events', 'run_ends', obj=run_ends, title='run end samples.')
-    return
-
-
-
-
+        if run_sizes:
+            run_ends = np.zeros(len(run_sizes), dtype=np.uint64)
+            cv = 0
+            for i, v in enumerate(run_sizes):
+                cv += v
+                run_ends[i] = cv
+            f.create_carray('/Events', 'run_ends', obj=run_ends, title='run end samples.')
 
 
 def _get_number(path, ch_prefix):
